@@ -1,0 +1,20 @@
+# Nixpacks config — Railway uses this to build the service.
+# Reference: https://nixpacks.com/docs/configuration/file
+providers = ["python"]
+
+[phases.setup]
+nixPkgs = ["python311", "gcc", "postgresql"]
+
+[phases.install]
+cmds = [
+    "python -m pip install --upgrade pip",
+    "pip install -e .",
+]
+
+[start]
+cmd = "python -m scripts.run_paper"
+
+[variables]
+PYTHONUNBUFFERED = "1"
+# Default to JSON logs on Railway for better log panel display.
+JSON_LOGS = "1"

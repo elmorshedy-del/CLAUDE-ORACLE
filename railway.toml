@@ -1,0 +1,24 @@
+# Railway service configuration.
+# Reference: https://docs.railway.app/deploy/config-as-code
+
+[build]
+builder = "NIXPACKS"
+# To use the Dockerfile instead, set: builder = "DOCKERFILE"
+
+[deploy]
+startCommand = "python -m scripts.run_paper"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Railway will probe this URL; the HTTP server in poly_paper.http_server
+# serves it on $PORT (set automatically by Railway).
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+
+# Minimum environment variables to set in the Railway dashboard:
+#   DATABASE_URL        — auto-populated if you add a Postgres plugin
+#   POLY_MODE           — "paper" (keep as paper until live is implemented)
+#   POLY_BANKROLL_USD   — e.g. 1000
+#   JSON_LOGS           — 1
+#
+# All other POLY_* variables have sensible defaults — see .env.example.
