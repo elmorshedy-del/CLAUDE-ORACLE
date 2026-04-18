@@ -50,6 +50,7 @@ When you see `tick_done` messages arriving, it's working.
 
 ### 6. Verify
 Railway will expose a public URL. Hit:
+- `https://YOUR-URL/` → **web dashboard** (auto-refreshing sleeve health, recent trades, system status)
 - `https://YOUR-URL/healthz` → `{"status":"ok"}`
 - `https://YOUR-URL/readyz` → `{"status":"ready", ...}` after first tick
 - `https://YOUR-URL/metrics` → per-sleeve stats JSON
@@ -80,25 +81,38 @@ python -m scripts.status
 
 ## Current state — what exists
 
-### Working (105 tests)
+### Working (162 tests)
 - **Exec layer** — `OrderIntent`/`Fill`/`OrderBook` Pydantic models, paper fill
   simulator that walks real Polymarket L2 books, verified per-category fee
   formula, shared router enforcing paper↔live parity.
-- **Feeds** — Coinbase BTC spot + Kraken fallback; Open-Meteo free ensemble
-  weather forecasts (40 members); Polymarket Gamma/CLOB REST client.
+- **Feeds** — Coinbase BTC spot + Kraken fallback; Open-Meteo free 40-member
+  ensemble weather forecasts (live-verified: 39 members per city);
+  Polymarket Gamma/CLOB REST client.
 - **Strategies**
   - `btc_updown` — directional BTC up/down 5m/15m with three sleeves
-    (conservative / balanced / aggressive), GBM fair value math, gross+net
-    edge gating so pure spread-harvesting never triggers
-  - `bundle_arb` — risk-free bundle detection for binary YES/NO markets and
-    `negRisk` events (guaranteed mutually exclusive)
-  - `ladder_arb` + `ladder_classify` — monotonicity detection for nested
-    date ladders ("out by April" ⊂ "out by December") and threshold ladders
-    ("above $800B" ⊃ "above $1.6T"); parses ladder variable from question text
-- **Universe** — rules-based auto-discovery with hard size caps per family.
-- **Runner + arb scanner** — two concurrent loops, logs every intent and fill
-  with full reasoning trail to Postgres.
-- **HTTP endpoints** — `/healthz`, `/readyz`, `/metrics`, `/tape`.
+  - `bundle_arb` — risk-free bundle detection for binary YES/NO and `negRisk` events
+  - `ladder_arb` + `ladder_classify` — monotonicity detection for date and
+    threshold ladders; parses ladder variable from question text
+  - `weather` — temperature + precipitation buckets with non-parametric
+    or NGR-calibrated fair values
+- **Research-rigor modules** (new)
+  - `ngr` — Non-homogeneous Gaussian Regression post-processing for
+    ensembles. Minimum-CRPS fitting. Standard ECMWF-style EMOS that
+    corrects raw ensemble bias and under-dispersion. On biased synthetic
+    data, cuts CRPS by ~55%.
+  - `weather_calibration` — persists every forecast with bucket metadata,
+    attaches observed outcomes at resolution, computes Brier score, Brier
+    Skill Score vs climatology, reliability bins, sharpness, AUC.
+    Without this, "edge" is an untested claim.
+  - `kelly` — fractional Kelly sizing replaces flat `max_position_usd`.
+    Quarter-Kelly default (per Thorp, Downey). Correlation-adjusted group
+    caps for mutually-exclusive buckets within one event.
+- **Universe** — rules-based auto-discovery with hard size caps.
+- **Runner + arb scanner + weather runner** — three concurrent strategy loops.
+- **Self-correction proposer** — continuous tuning with HARD BOUNDS.
+- **Web dashboard at `/`** — auto-refreshing sleeve health, recent trades,
+  system status. No build step.
+- **HTTP endpoints** — `/`, `/healthz`, `/readyz`, `/metrics`, `/tape`.
 
 ### Empirical findings from real Polymarket data
 **The honest results from live scans:**
@@ -117,11 +131,9 @@ catching transient imbalances (the continuous arb scanner) or strategies with
 genuine models (weather ensemble, directional theses, LLM judgment).
 
 ### Not yet built
-- Weather strategy sleeve (data feed works; strategy pending)
 - Live execution (`exec/live.py` is a stub that raises NotImplementedError)
-- Self-correction config proposer
-- Web dashboard (CLI `status.py` works today; web is Phase 6)
 - News LLM judge (deferred until calibration system exists)
+- Full PnL attribution (realised + mark-to-market)
 
 ---
 

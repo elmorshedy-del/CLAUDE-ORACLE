@@ -136,6 +136,10 @@ async def ensure_sleeves_seeded() -> None:
                 )
         await db.commit()
 
+    # Weather sleeves — separate universe (not indexed by strategy_family).
+    from .weather_runner import ensure_weather_sleeves_seeded
+    await ensure_weather_sleeves_seeded(BANKROLL_USD)
+
 
 def _load_exec_sleeve(row: SleeveConfig) -> ExecSleeveConfig:
     return ExecSleeveConfig(

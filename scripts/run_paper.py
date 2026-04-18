@@ -26,6 +26,8 @@ import structlog
 from poly_paper.arb_scanner import run_arb_scanner_forever
 from poly_paper.http_server import serve_forever as serve_http_forever
 from poly_paper.runner import run_forever as run_main_loop_forever
+from poly_paper.selfcorrect import run_selfcorrect_forever
+from poly_paper.weather_runner import run_weather_forever
 
 
 async def main() -> None:
@@ -36,12 +38,14 @@ async def main() -> None:
             structlog.processors.JSONRenderer() if os.environ.get("JSON_LOGS") else structlog.dev.ConsoleRenderer(),
         ],
     )
-    # Run the HTTP server, the directional-strategy loop, and the arb scanner concurrently.
-    # If any raises, log it but keep the others running.
+    # Run all loops concurrently. If any raises, the process exits — Railway
+    # will restart it per railway.toml restartPolicy.
     await asyncio.gather(
         serve_http_forever(),
         run_main_loop_forever(),
         run_arb_scanner_forever(),
+        run_weather_forever(),
+        run_selfcorrect_forever(),
         return_exceptions=False,
     )
 

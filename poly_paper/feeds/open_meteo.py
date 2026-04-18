@@ -131,19 +131,23 @@ class OpenMeteo:
         dates = days_data.get("time", [])
         samples: dict[int, list[DailyForecast]] = {}
         # Open-Meteo returns lists like "temperature_2m_max_member01" for each member
-        # when using the ensemble endpoint. Parse those into per-member series.
-        n_members = 0
-        for k, vlist in days_data.items():
+        # (1-indexed: member01, member02, ..., memberNN). The flat "temperature_2m_max"
+        # field is the deterministic mean; we skip it in favor of per-member samples.
+        member_ids: set[int] = set()
+        for k in days_data.keys():
             if not k.startswith("temperature_2m_max_member"):
                 continue
-            mid = int(k.split("member")[1])
-            n_members = max(n_members, mid + 1)
-        # Fallback: if the API returns flat fields (some models don't split by member)
+            try:
+                mid = int(k.split("member")[1])
+                member_ids.add(mid)
+            except ValueError:
+                continue
+        # Fallback: if the API returns no per-member fields (some models flatten),
         # treat the flat forecast as a single sample.
-        if n_members == 0:
+        if not member_ids:
             return [EnsembleSample(member_id=0, daily=await self._flatten(days_data))]
 
-        for mid in range(n_members):
+        for mid in sorted(member_ids):
             tmax = days_data.get(f"temperature_2m_max_member{mid:02d}", [])
             tmin = days_data.get(f"temperature_2m_min_member{mid:02d}", [])
             prcp = days_data.get(f"precipitation_sum_member{mid:02d}", [])

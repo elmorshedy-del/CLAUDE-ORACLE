@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>poly-paper dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #0a0e14;
+    color: #c9d1d9;
+    padding: 24px;
+    line-height: 1.5;
+    font-size: 14px;
+  }
+  h1 { font-size: 24px; margin-bottom: 4px; color: #e6edf3; }
+  .subtitle { color: #7d8590; margin-bottom: 24px; font-size: 13px; }
+  .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 24px; }
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .card h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #7d8590;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .stat-big {
+    font-size: 32px;
+    font-weight: 600;
+    color: #e6edf3;
+    line-height: 1.2;
+  }
+  .stat-sub { color: #7d8590; font-size: 12px; margin-top: 2px; }
+  .ok { color: #3fb950; }
+  .warn { color: #d29922; }
+  .err { color: #f85149; }
+  .dim { color: #7d8590; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td {
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid #21262d;
+    white-space: nowrap;
+  }
+  th { color: #7d8590; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .full-width { grid-column: 1 / -1; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .pill.on { background: #0d3320; color: #3fb950; }
+  .pill.off { background: #3a1515; color: #f85149; }
+  .pill.cons { background: #1f2937; color: #93c5fd; }
+  .pill.bal { background: #1f2937; color: #a78bfa; }
+  .pill.agg { background: #1f2937; color: #fbbf24; }
+  .pill.hi { background: #0d3320; color: #3fb950; }
+  .pill.med { background: #3a2f15; color: #d29922; }
+  .pill.lo { background: #3a1515; color: #f85149; }
+  .ctrl {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: #7d8590;
+  }
+  .ctrl input[type="checkbox"] { vertical-align: middle; }
+  .ctrl a, .ctrl button {
+    color: #58a6ff;
+    text-decoration: none;
+    background: none;
+    border: 1px solid #30363d;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .ctrl a:hover, .ctrl button:hover { background: #21262d; }
+  .error-banner {
+    background: #3a1515;
+    border: 1px solid #f85149;
+    color: #f85149;
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 13px;
+  }
+  .tape-row:hover { background: #161b22; }
+  .reason { color: #7d8590; font-size: 11px; font-style: italic; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  .footer { margin-top: 32px; text-align: center; color: #484f58; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>poly-paper</h1>
+<div class="subtitle">
+  Polymarket paper trading — paper↔live parity, <span id="footer-version">loading…</span>
+</div>
+
+<div class="ctrl">
+  <label>
+    <input type="checkbox" id="auto-refresh" checked>
+    Auto-refresh every <span id="refresh-n">10</span>s
+  </label>
+  <button onclick="refreshAll()">Refresh now</button>
+  <a href="/metrics" target="_blank">/metrics</a>
+  <a href="/tape" target="_blank">/tape</a>
+  <a href="/healthz" target="_blank">/healthz</a>
+  <span class="dim" id="last-refresh"></span>
+</div>
+
+<div id="errors"></div>
+
+<!-- Top summary cards -->
+<div class="grid">
+  <div class="card">
+    <h2>System status</h2>
+    <div class="stat-big" id="status-text">…</div>
+    <div class="stat-sub" id="status-sub"></div>
+  </div>
+  <div class="card">
+    <h2>Markets in universe</h2>
+    <div class="stat-big" id="markets-count">…</div>
+    <div class="stat-sub">auto-discovered from Polymarket</div>
+  </div>
+  <div class="card">
+    <h2>Fills — 24h</h2>
+    <div class="stat-big" id="fills-24h">…</div>
+    <div class="stat-sub" id="fills-breakdown"></div>
+  </div>
+  <div class="card">
+    <h2>Intents — 24h</h2>
+    <div class="stat-big" id="intents-24h">…</div>
+    <div class="stat-sub" id="intents-detail"></div>
+  </div>
+</div>
+
+<!-- Sleeve health -->
+<div class="card full-width" style="margin-bottom: 20px;">
+  <h2>Sleeve health (last 24h)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Sleeve</th>
+        <th>Stance</th>
+        <th>Strategy</th>
+        <th>Enabled</th>
+        <th class="num">Intents</th>
+        <th class="num">Fills</th>
+        <th class="num">Rejected</th>
+        <th class="num">High-conf</th>
+        <th class="num">Fees 24h</th>
+        <th class="num">Max $/trade</th>
+        <th class="num">Min edge</th>
+        <th class="num">Ver</th>
+      </tr>
+    </thead>
+    <tbody id="sleeve-body">
+      <tr><td colspan="12" class="dim">loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Recent tape -->
+<div class="card full-width">
+  <h2>Recent fills</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Sleeve</th>
+        <th>Side</th>
+        <th>Type</th>
+        <th class="num">Price</th>
+        <th class="num">Shares</th>
+        <th>Confidence</th>
+        <th class="num">Fees</th>
+        <th class="num">Slippage</th>
+        <th>Reasoning</th>
+      </tr>
+    </thead>
+    <tbody id="tape-body">
+      <tr><td colspan="10" class="dim">loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="footer">
+  Last successful tick: <span id="last-tick-abs">—</span> ·
+  Readiness: <span id="readiness">—</span>
+</div>
+
+<script>
+const REFRESH_SECONDS = 10;
+document.getElementById("refresh-n").textContent = REFRESH_SECONDS;
+
+async function fetchJson(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return await r.json();
+}
+
+function fmtUSD(n) {
+  if (n == null) return "—";
+  return "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+function fmtNum(n) {
+  if (n == null) return "—";
+  return Number(n).toLocaleString();
+}
+function shortSleeveId(s) {
+  return s.replace(/^btc_up_down_/, "").replace(/^weather__/, "w-").replace(/^ladder_arb__/, "ladder-");
+}
+function pillClass(stance) {
+  return { conservative: "cons", balanced: "bal", aggressive: "agg" }[stance] || "";
+}
+function confPill(conf) {
+  return `<span class="pill ${conf}">${conf || "—"}</span>`;
+}
+
+function ageString(iso) {
+  if (!iso) return "never";
+  const age = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (age < 60) return `${Math.round(age)}s ago`;
+  if (age < 3600) return `${Math.round(age / 60)}m ago`;
+  return `${(age / 3600).toFixed(1)}h ago`;
+}
+
+function showError(msg) {
+  const el = document.getElementById("errors");
+  el.innerHTML = `<div class="error-banner">${msg}</div>`;
+}
+function clearError() { document.getElementById("errors").innerHTML = ""; }
+
+async function refreshReadiness() {
+  try {
+    const r = await fetch("/readyz");
+    const d = await r.json();
+    const el = document.getElementById("readiness");
+    const status = document.getElementById("status-text");
+    const sub = document.getElementById("status-sub");
+    if (r.ok && d.status === "ready") {
+      el.innerHTML = `<span class="ok">ready</span>`;
+      status.innerHTML = `<span class="ok">● running</span>`;
+      sub.textContent = `Last tick ${ageString(d.last_tick_at)}`;
+    } else if (d.status === "warming_up") {
+      el.innerHTML = `<span class="warn">warming up</span>`;
+      status.innerHTML = `<span class="warn">● warming</span>`;
+      sub.textContent = "waiting for first tick";
+    } else {
+      el.innerHTML = `<span class="err">stale</span>`;
+      status.innerHTML = `<span class="err">● stale</span>`;
+      sub.textContent = `last tick ${ageString(d.last_tick_at)} (exceeds tolerance)`;
+    }
+    document.getElementById("last-tick-abs").textContent = d.last_tick_at || "never";
+  } catch (e) {
+    document.getElementById("readiness").innerHTML = `<span class="err">unreachable</span>`;
+    document.getElementById("status-text").innerHTML = `<span class="err">● down</span>`;
+  }
+}
+
+async function refreshMetrics() {
+  try {
+    const m = await fetchJson("/metrics");
+    document.getElementById("markets-count").textContent = fmtNum(m.markets_in_universe || 0);
+
+    const tbody = document.getElementById("sleeve-body");
+    if (!m.sleeves || m.sleeves.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="12" class="dim">no sleeves seeded</td></tr>`;
+      return;
+    }
+
+    let totalIntents = 0, totalFills = 0, totalRej = 0, totalFees = 0;
+    const rows = m.sleeves.map(s => {
+      totalIntents += s.intents_24h;
+      totalFills += s.fills_24h;
+      totalRej += s.rejected_24h;
+      totalFees += s.fees_24h_usd;
+      const hqPct = s.high_conf_fill_pct;
+      const hqClass = hqPct >= 80 ? "ok" : (hqPct >= 50 ? "warn" : "err");
+      const hqDisplay = s.fills_24h > 0 ? `<span class="${hqClass}">${hqPct}%</span>` : "—";
+      return `
+        <tr>
+          <td><code>${shortSleeveId(s.sleeve_id)}</code></td>
+          <td><span class="pill ${pillClass(s.stance)}">${s.stance}</span></td>
+          <td>${s.strategy}</td>
+          <td><span class="pill ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'on' : 'off'}</span></td>
+          <td class="num">${fmtNum(s.intents_24h)}</td>
+          <td class="num">${fmtNum(s.fills_24h)}</td>
+          <td class="num">${fmtNum(s.rejected_24h)}</td>
+          <td class="num">${hqDisplay}</td>
+          <td class="num">${fmtUSD(s.fees_24h_usd)}</td>
+          <td class="num">${fmtUSD(s.max_position_usd)}</td>
+          <td class="num">${s.min_edge_bps} bp</td>
+          <td class="num dim">v${s.version}</td>
+        </tr>
+      `;
+    }).join("");
+    tbody.innerHTML = rows;
+
+    document.getElementById("intents-24h").textContent = fmtNum(totalIntents);
+    document.getElementById("intents-detail").textContent =
+      totalIntents === 0 ? "no edges found — system refusing to trade" : `across ${m.sleeves.filter(s=>s.intents_24h>0).length} active sleeves`;
+    document.getElementById("fills-24h").textContent = fmtNum(totalFills);
+    document.getElementById("fills-breakdown").innerHTML =
+      totalFills > 0
+        ? `<span class="dim">${totalRej} rejected · ${fmtUSD(totalFees)} fees</span>`
+        : "no fills yet";
+
+    clearError();
+  } catch (e) {
+    showError(`Failed to load /metrics: ${e.message}`);
+  }
+}
+
+async function refreshTape() {
+  try {
+    const t = await fetchJson("/tape");
+    const tbody = document.getElementById("tape-body");
+    if (!t || t.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="10" class="dim">no trades yet</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = t.map(f => {
+      const when = new Date(f.created_at).toLocaleTimeString();
+      const price = f.rejected ? "—" : (f.avg_price ? Number(f.avg_price).toFixed(4) : "—");
+      const shares = f.rejected ? "—" : (f.filled_size_shares ? Number(f.filled_size_shares).toFixed(0) : "—");
+      const reason = (f.reasoning || f.notes || "").substring(0, 120);
+      return `
+        <tr class="tape-row">
+          <td class="dim">${when}</td>
+          <td><code>${shortSleeveId(f.sleeve_id)}</code></td>
+          <td>${f.side}</td>
+          <td>${f.order_type}</td>
+          <td class="num">${price}</td>
+          <td class="num">${shares}</td>
+          <td>${f.rejected ? '<span class="pill off">REJ</span>' : confPill(f.confidence)}</td>
+          <td class="num">${fmtUSD(f.fees_usd)}</td>
+          <td class="num">${f.slippage_bps || 0} bp</td>
+          <td class="reason">${reason}</td>
+        </tr>
+      `;
+    }).join("");
+  } catch (e) {
+    showError(`Failed to load /tape: ${e.message}`);
+  }
+}
+
+async function refreshAll() {
+  document.getElementById("last-refresh").textContent = `refreshing…`;
+  await Promise.all([refreshReadiness(), refreshMetrics(), refreshTape()]);
+  document.getElementById("last-refresh").textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
+let intervalId = null;
+function setupAutoRefresh() {
+  if (intervalId) clearInterval(intervalId);
+  if (document.getElementById("auto-refresh").checked) {
+    intervalId = setInterval(refreshAll, REFRESH_SECONDS * 1000);
+  }
+}
+document.getElementById("auto-refresh").addEventListener("change", setupAutoRefresh);
+
+refreshAll();
+setupAutoRefresh();
+</script>
+
+</body>
+</html>

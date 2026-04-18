@@ -44,10 +44,18 @@ def record_tick() -> None:
 # ---------------------------------------------------------------------------
 
 async def index(_req: web.Request) -> web.Response:
-    return web.json_response({
-        "service": "poly-paper",
-        "endpoints": ["/healthz", "/readyz", "/metrics", "/tape"],
-    })
+    # Serve the HTML dashboard at /.
+    import os
+    html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    try:
+        with open(html_path, "r", encoding="utf-8") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+    except FileNotFoundError:
+        return web.json_response({
+            "service": "poly-paper",
+            "endpoints": ["/healthz", "/readyz", "/metrics", "/tape"],
+            "note": "dashboard HTML missing; falling back to JSON",
+        })
 
 
 async def healthz(_req: web.Request) -> web.Response:
