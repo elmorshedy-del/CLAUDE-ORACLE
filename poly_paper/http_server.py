@@ -8,7 +8,7 @@ Endpoints:
   GET /healthz       — liveness (always 200 if process is up)
   GET /readyz        — readiness (200 only if last tick was recent)
   GET /metrics       — sleeve health snapshot as JSON
-  GET /tape          — last 50 intents+fills as JSON
+  GET /tape          — last 50 intents+fills as JSON (supports start/end filters)
   GET /export/manifest — lightweight inventory of the full export bundle
   GET /export/download — compressed multi-file export of all persisted audit data
 
@@ -27,7 +27,14 @@ from sqlalchemy import func, select
 
 from .db.models import FillRow, Market, OrderIntentRow, SleeveConfig
 from .db.session import SessionLocal
-from .export_bundle import build_manifest, prepare_export_path, write_export_bundle
+from .export_bundle import (
+    ExportFilter,
+    build_manifest,
+    fill_intent_payload,
+    parse_export_datetime,
+    prepare_export_path,
+    write_export_bundle,
+)
 
 
 # Time of the last successful main-loop tick; written by runner.py each cycle.
@@ -87,6 +94,26 @@ async def metrics(_req: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+def _bad_request(message: str) -> web.HTTPBadRequest:
+    return web.HTTPBadRequest(
+        text=_json.dumps({"error": message}),
+        content_type="application/json",
+    )
+
+
+def _export_filter_from_request(req: web.Request) -> ExportFilter:
+    start_raw = req.query.get("start")
+    end_raw = req.query.get("end")
+    try:
+        start = parse_export_datetime(start_raw) if start_raw else None
+        end = parse_export_datetime(end_raw, is_end=True) if end_raw else None
+    except ValueError as exc:
+        raise _bad_request(f"Invalid start/end value: {exc}") from exc
+    if start is not None and end is not None and start >= end:
+        raise _bad_request("start must be earlier than end")
+    return ExportFilter(start=start, end=end)
+
+
 async def _metrics_payload() -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     async with SessionLocal() as db:
@@ -137,67 +164,51 @@ async def _metrics_payload() -> dict:
 
 
 async def tape(_req: web.Request) -> web.Response:
+    export_filter = _export_filter_from_request(_req)
     raw_limit = _req.query.get("limit", "50")
     try:
         limit = max(1, min(int(raw_limit), 1000))
     except ValueError:
         limit = 50
-    payload = await _tape_payload(limit=limit)
+    payload = await _tape_payload(limit=limit, export_filter=export_filter)
     return web.json_response(payload)
 
 
-async def _tape_payload(limit: int = 50) -> list[dict]:
+async def _tape_payload(
+    limit: int = 50,
+    export_filter: ExportFilter | None = None,
+) -> list[dict]:
+    export_filter = export_filter or ExportFilter()
     async with SessionLocal() as db:
-        rows = (await db.execute(
+        stmt = (
             select(FillRow, OrderIntentRow)
             .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
             .order_by(FillRow.created_at.desc()).limit(limit)
-        )).all()
-        return [
-            {
-                "fill_id": f.fill_id,
-                "client_order_id": i.client_order_id,
-                "created_at": f.created_at.isoformat(),
-                "sleeve_id": i.sleeve_id,
-                "market_condition_id": i.market_condition_id,
-                "token_id": i.token_id,
-                "side": i.side,
-                "order_type": i.order_type,
-                "mode": f.mode,
-                "rejected": f.rejected,
-                "confidence": f.confidence,
-                "avg_price": f.avg_price,
-                "filled_size_shares": f.filled_size_shares,
-                "notional_usd": f.notional_usd,
-                "fees_usd": f.fees_usd,
-                "gas_usd": f.gas_usd,
-                "slippage_bps": f.slippage_bps,
-                "latency_ms": f.latency_ms,
-                "legs_json": f.legs_json,
-                "notes": f.notes,
-                "reasoning": i.reasoning,
-                "resolved": f.resolved,
-                "resolved_winner": f.resolved_winner,
-                "resolved_pnl_usd": f.resolved_pnl_usd,
-                "resolved_at": f.resolved_at.isoformat() if f.resolved_at else None,
-            }
-            for f, i in rows
-        ]
+        )
+        if export_filter.start is not None:
+            stmt = stmt.where(FillRow.created_at >= export_filter.start)
+        if export_filter.end is not None:
+            stmt = stmt.where(FillRow.created_at < export_filter.end)
+        rows = (await db.execute(stmt)).all()
+        return [fill_intent_payload(fill, intent) for fill, intent in rows]
 
 
 async def export_manifest(_req: web.Request) -> web.Response:
-    payload = await build_manifest()
+    export_filter = _export_filter_from_request(_req)
+    payload = await build_manifest(export_filter=export_filter)
     return web.json_response(payload)
 
 
 async def export_download(_req: web.Request) -> web.StreamResponse:
+    export_filter = _export_filter_from_request(_req)
     metrics_payload = await _metrics_payload()
-    tape_payload = await _tape_payload(limit=100)
-    export_path = prepare_export_path()
+    tape_payload = await _tape_payload(limit=100, export_filter=export_filter)
+    export_path = prepare_export_path(export_filter)
     await write_export_bundle(
         export_path,
         metrics_payload=metrics_payload,
         tape_payload=tape_payload,
+        export_filter=export_filter,
     )
     response = web.FileResponse(path=export_path)
     response.headers["Content-Disposition"] = f'attachment; filename="{export_path.name}"'
