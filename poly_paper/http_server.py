@@ -9,6 +9,8 @@ Endpoints:
   GET /readyz        — readiness (200 only if last tick was recent)
   GET /metrics       — sleeve health snapshot as JSON
   GET /tape          — last 50 intents+fills as JSON
+  GET /export/manifest — lightweight inventory of the full export bundle
+  GET /export/download — compressed multi-file export of all persisted audit data
 
 No external deps beyond stdlib + the existing DB session.
 """
@@ -25,6 +27,7 @@ from sqlalchemy import func, select
 
 from .db.models import FillRow, Market, OrderIntentRow, SleeveConfig
 from .db.session import SessionLocal
+from .export_bundle import build_manifest, prepare_export_path, write_export_bundle
 
 
 # Time of the last successful main-loop tick; written by runner.py each cycle.
@@ -80,6 +83,11 @@ async def readyz(_req: web.Request) -> web.Response:
 
 
 async def metrics(_req: web.Request) -> web.Response:
+    payload = await _metrics_payload()
+    return web.json_response(payload)
+
+
+async def _metrics_payload() -> dict:
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     async with SessionLocal() as db:
         sleeves = (await db.execute(select(SleeveConfig).order_by(SleeveConfig.sleeve_id))).scalars().all()
@@ -120,41 +128,81 @@ async def metrics(_req: web.Request) -> web.Response:
         n_markets = (await db.execute(
             select(func.count()).select_from(Market).where(Market.in_universe.is_(True))
         )).scalar() or 0
-    return web.json_response({
+    return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "markets_in_universe": n_markets,
         "last_tick_at": LAST_TICK_AT.isoformat() if LAST_TICK_AT else None,
         "sleeves": out,
-    })
+    }
 
 
 async def tape(_req: web.Request) -> web.Response:
+    raw_limit = _req.query.get("limit", "50")
+    try:
+        limit = max(1, min(int(raw_limit), 1000))
+    except ValueError:
+        limit = 50
+    payload = await _tape_payload(limit=limit)
+    return web.json_response(payload)
+
+
+async def _tape_payload(limit: int = 50) -> list[dict]:
     async with SessionLocal() as db:
         rows = (await db.execute(
             select(FillRow, OrderIntentRow)
             .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
-            .order_by(FillRow.created_at.desc()).limit(50)
+            .order_by(FillRow.created_at.desc()).limit(limit)
         )).all()
-        out = [
+        return [
             {
                 "fill_id": f.fill_id,
+                "client_order_id": i.client_order_id,
                 "created_at": f.created_at.isoformat(),
                 "sleeve_id": i.sleeve_id,
                 "market_condition_id": i.market_condition_id,
+                "token_id": i.token_id,
                 "side": i.side,
                 "order_type": i.order_type,
+                "mode": f.mode,
                 "rejected": f.rejected,
                 "confidence": f.confidence,
                 "avg_price": f.avg_price,
                 "filled_size_shares": f.filled_size_shares,
+                "notional_usd": f.notional_usd,
                 "fees_usd": f.fees_usd,
+                "gas_usd": f.gas_usd,
                 "slippage_bps": f.slippage_bps,
+                "latency_ms": f.latency_ms,
+                "legs_json": f.legs_json,
                 "notes": f.notes,
                 "reasoning": i.reasoning,
+                "resolved": f.resolved,
+                "resolved_winner": f.resolved_winner,
+                "resolved_pnl_usd": f.resolved_pnl_usd,
+                "resolved_at": f.resolved_at.isoformat() if f.resolved_at else None,
             }
             for f, i in rows
         ]
-    return web.json_response(out)
+
+
+async def export_manifest(_req: web.Request) -> web.Response:
+    payload = await build_manifest()
+    return web.json_response(payload)
+
+
+async def export_download(_req: web.Request) -> web.StreamResponse:
+    metrics_payload = await _metrics_payload()
+    tape_payload = await _tape_payload(limit=100)
+    export_path = prepare_export_path()
+    await write_export_bundle(
+        export_path,
+        metrics_payload=metrics_payload,
+        tape_payload=tape_payload,
+    )
+    response = web.FileResponse(path=export_path)
+    response.headers["Content-Disposition"] = f'attachment; filename="{export_path.name}"'
+    response.content_type = "application/zip"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +216,8 @@ def build_app() -> web.Application:
     app.router.add_get("/readyz", readyz)
     app.router.add_get("/metrics", metrics)
     app.router.add_get("/tape", tape)
+    app.router.add_get("/export/manifest", export_manifest)
+    app.router.add_get("/export/download", export_download)
     return app
 
 
