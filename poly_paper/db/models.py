@@ -192,3 +192,29 @@ class SleevePnlHourly(Base):
     __table_args__ = (
         Index("ix_sleeve_pnl_sleeve_hour", "sleeve_id", "hour_bucket", unique=True),
     )
+
+
+class NGRFitRow(Base):
+    """One fitted NGR parameter set per (city, bucket_kind) slice.
+
+    We keep only the LATEST fit per slice (insert new row, keep old for audit).
+    Look-up at prediction time is "WHERE city=X AND kind=Y ORDER BY fitted_at DESC LIMIT 1".
+    """
+    __tablename__ = "ngr_fits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    city: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String, index=True)  # "temperature_max_day" / "precipitation_sum_period"
+    a: Mapped[float] = mapped_column(Float)
+    b: Mapped[float] = mapped_column(Float)
+    c: Mapped[float] = mapped_column(Float)
+    d: Mapped[float] = mapped_column(Float)
+    n_training_samples: Mapped[int] = mapped_column(Integer)
+    mean_crps_train: Mapped[float] = mapped_column(Float)
+    mean_crps_raw: Mapped[float] = mapped_column(Float)
+    improvement_pct: Mapped[float] = mapped_column(Float)  # (raw - ngr) / raw * 100
+    fitted_at: Mapped[_dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_ngr_city_kind_fitted", "city", "kind", "fitted_at"),
+    )

@@ -184,8 +184,9 @@ class TestPostOnly:
         assert not f.rejected
         assert f.legs[0].role == "maker"
         assert f.legs[0].price == Decimal("0.50")
-        # Maker confidence is at best MEDIUM (queue position unknown in paper).
-        assert f.confidence.value in ("medium", "low")
+        # 10 shares on a 1000-deep book both sides = thick book, small size → HIGH.
+        # If the book were thin or our size dominated, this would downgrade.
+        assert f.confidence.value in ("high", "medium")
 
     def test_maker_rebate_applied(self) -> None:
         cfg = PaperSimConfig(maker_fill_default="always")

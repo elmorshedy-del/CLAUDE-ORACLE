@@ -6,25 +6,48 @@ https://open-meteo.com — free tier (no key), 10k calls/day. Returns:
   - ENSEMBLE models — multiple weather models (GFS, ECMWF, etc.) with
     probability distributions, not just point estimates
 
-Why this works for Polymarket weather markets:
-  Polymarket has "precipitation in NYC in April" type markets. These resolve
-  based on observed totals at specific weather stations (e.g. Central Park).
-  Open-Meteo's ensemble gives us a PROBABILITY DISTRIBUTION over future
-  rainfall, which we can use to compute fair prices on "rainfall < X inches"
-  type buckets.
-
-Strategy plumbing comes in Phase 3 — this module provides the data.
+PREMIUM TIER:
+  If you have a paid Open-Meteo subscription, set these env vars and we use
+  the customer endpoint (higher rate limit, no throttling, priority routing):
+    POLY_WEATHER_API_KEY        — your Open-Meteo API key
+    POLY_WEATHER_API_BASE       — override base (e.g. https://customer-api.open-meteo.com)
+  Otherwise we silently fall back to the free public endpoint.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import httpx
 
-OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
-OPEN_METEO_ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
-OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
+# The free endpoints are the documented defaults. Premium users override
+# the base URL via POLY_WEATHER_API_BASE and we auto-append the api_key.
+_BASE = os.environ.get("POLY_WEATHER_API_BASE", "").rstrip("/")
+_API_KEY = os.environ.get("POLY_WEATHER_API_KEY", "").strip()
+_PREMIUM_MODE = bool(_API_KEY)
+
+if _BASE:
+    OPEN_METEO = f"{_BASE}/v1/forecast"
+    OPEN_METEO_ENSEMBLE = f"{_BASE}/v1/ensemble"
+    OPEN_METEO_ARCHIVE = f"{_BASE}/v1/archive"
+else:
+    # Premium users typically use customer-api.* subdomains without a base override.
+    if _PREMIUM_MODE:
+        OPEN_METEO = "https://customer-api.open-meteo.com/v1/forecast"
+        OPEN_METEO_ENSEMBLE = "https://customer-api.open-meteo.com/v1/ensemble"
+        OPEN_METEO_ARCHIVE = "https://customer-archive-api.open-meteo.com/v1/archive"
+    else:
+        OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
+        OPEN_METEO_ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
+        OPEN_METEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def _augment_params(params: dict) -> dict:
+    """Add apikey (note: the parameter is 'apikey' lowercased for Open-Meteo)."""
+    if _API_KEY:
+        return {**params, "apikey": _API_KEY}
+    return params
 
 
 # Common Polymarket weather-market cities — lat/lon.

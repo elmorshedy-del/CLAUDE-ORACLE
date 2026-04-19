@@ -85,6 +85,10 @@ class WeatherForecastRecord(Base):
     raw_fair_value: Mapped[float] = mapped_column(Float)  # before post-processing
     ensemble_size: Mapped[int] = mapped_column(Integer)
     members_in_bucket: Mapped[int] = mapped_column(Integer)
+    # Ensemble moments on the continuous variable (tmax_c or precip_mm_total).
+    # Persisted so the NGR trainer can fit against observed_value later.
+    ensemble_mean_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ensemble_var_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     horizon_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     post_processing: Mapped[str] = mapped_column(String, default="raw")  # "raw" | "ngr"
 
@@ -124,6 +128,8 @@ async def record_forecast(
     raw_fair_value: float,
     ensemble_size: int,
     members_in_bucket: int,
+    ensemble_mean_value: Optional[float] = None,
+    ensemble_var_value: Optional[float] = None,
     horizon_hours: Optional[float] = None,
     post_processing: str = "raw",
     market_bid: Optional[float] = None,
@@ -147,6 +153,8 @@ async def record_forecast(
             raw_fair_value=raw_fair_value,
             ensemble_size=ensemble_size,
             members_in_bucket=members_in_bucket,
+            ensemble_mean_value=ensemble_mean_value,
+            ensemble_var_value=ensemble_var_value,
             horizon_hours=horizon_hours,
             post_processing=post_processing,
             market_bid=market_bid,

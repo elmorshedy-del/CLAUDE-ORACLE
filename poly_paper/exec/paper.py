@@ -346,11 +346,26 @@ def _simulate_maker(
     leg = FillLeg(price=limit_price, size_shares=filled_shares, role="maker")
     fees = leg_fee_usd(price=limit_price, size_shares=filled_shares, category=category, role="maker")
 
-    # Confidence: MEDIUM by default for all makers. Downgrade if order was very large vs visible depth.
+    # Confidence classification — more nuanced than "always MEDIUM":
+    #   HIGH   - posted AT top-of-book, book has depth, our size < 30% of opposite depth
+    #   MEDIUM - posted AT top-of-book but small book / larger relative size
+    #   LOW    - our size dominates the book (>= threshold_pct of depth)
     depth_top_1pct = book.depth_within(intent.side, Decimal("0.01"))
-    confidence = FillConfidence.MEDIUM
-    if depth_top_1pct > 0 and filled_shares > config.large_order_depth_threshold * depth_top_1pct:
+    size_ratio = filled_shares / depth_top_1pct if depth_top_1pct > 0 else Decimal("2")
+    opposite_visible = Decimal(str(opposite_depth))
+
+    if size_ratio >= config.large_order_depth_threshold:
         confidence = FillConfidence.LOW
+    elif (
+        # A "thick" book = at least 2× our order size on the opposite side AND
+        # meaningful same-side depth (we're not alone at top). Those are the
+        # conditions where a live maker fill is realistic.
+        opposite_visible >= filled_shares * Decimal("2")
+        and depth_top_1pct >= filled_shares * Decimal("2")
+    ):
+        confidence = FillConfidence.HIGH
+    else:
+        confidence = FillConfidence.MEDIUM
 
     return Fill(
         intent=intent,

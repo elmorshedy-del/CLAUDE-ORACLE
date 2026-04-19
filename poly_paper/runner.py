@@ -99,16 +99,26 @@ class VolCache:
 
 async def ensure_sleeves_seeded() -> None:
     """Create sleeve config rows if they don't exist yet."""
+    import os
+    use_split = os.environ.get("POLY_BTC_SPLIT_SLEEVES", "1") not in ("0", "false", "no")
     async with SessionLocal() as db:
         for fam in ENABLED_FAMILIES:
             fam = fam.strip()
             if not fam:
                 continue
-            # Two strategy families share the same market universe: directional
-            # btc_updown and market-agnostic bundle_arb. They complement each other.
-            all_configs = (
-                default_btc_up_down_sleeves(strategy_family=fam, total_bankroll_usd=BANKROLL_USD)
-                + default_bundle_arb_sleeves(strategy_family=fam, total_bankroll_usd=BANKROLL_USD)
+            # BTC directional sleeves: either the legacy both-sides picker or
+            # the new split Up-only / Down-only sleeves (6 per family).
+            if use_split:
+                from .strategies.btc_updown import default_btc_up_down_split_sleeves
+                btc_configs = default_btc_up_down_split_sleeves(
+                    strategy_family=fam, total_bankroll_usd=BANKROLL_USD,
+                )
+            else:
+                btc_configs = default_btc_up_down_sleeves(
+                    strategy_family=fam, total_bankroll_usd=BANKROLL_USD,
+                )
+            all_configs = btc_configs + default_bundle_arb_sleeves(
+                strategy_family=fam, total_bankroll_usd=BANKROLL_USD,
             )
             for exec_cfg in all_configs:
                 existing = (
@@ -134,6 +144,39 @@ async def ensure_sleeves_seeded() -> None:
                         extra_json={"min_gross_edge_bps": exec_cfg.min_gross_edge_bps},
                     )
                 )
+        # Universe-wide arb sleeves — NOT tied to BTC or any specific family.
+        # The arb scanner pulls events across all tags (sports/politics/weather/
+        # crypto/etc) and bundle_arb math works on any mutually-exclusive event.
+        # These sleeves have strategy_name="bundle_arb" so the scanner picks
+        # them up via `WHERE strategy_name='bundle_arb'` without needing to
+        # know about strategy_family.
+        global_arb_configs = default_bundle_arb_sleeves(
+            strategy_family="global_arb", total_bankroll_usd=BANKROLL_USD,
+        )
+        for exec_cfg in global_arb_configs:
+            existing = (
+                await db.execute(
+                    select(SleeveConfig).where(SleeveConfig.sleeve_id == exec_cfg.sleeve_id)
+                )
+            ).scalar_one_or_none()
+            if existing:
+                continue
+            db.add(
+                SleeveConfig(
+                    sleeve_id=exec_cfg.sleeve_id,
+                    stance=exec_cfg.stance.value,
+                    strategy_name=exec_cfg.strategy_name,
+                    market_selector=exec_cfg.market_selector,
+                    bankroll_usd=str(exec_cfg.bankroll_usd),
+                    max_position_usd=str(exec_cfg.max_position_usd),
+                    min_edge_bps=exec_cfg.min_edge_bps,
+                    max_cross_spread_bps=exec_cfg.max_cross_spread_bps,
+                    enabled=exec_cfg.enabled,
+                    version=exec_cfg.version,
+                    notes=exec_cfg.notes,
+                    extra_json={"min_gross_edge_bps": exec_cfg.min_gross_edge_bps},
+                )
+            )
         await db.commit()
 
     # Weather sleeves — separate universe (not indexed by strategy_family).

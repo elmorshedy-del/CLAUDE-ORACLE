@@ -3,379 +3,499 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>poly-paper dashboard</title>
+<title>poly-paper</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: #0a0e14;
-    color: #c9d1d9;
-    padding: 24px;
-    line-height: 1.5;
-    font-size: 14px;
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0b0d10;--panel:#12161b;--panel-2:#171c22;--border:#222931;
+    --text:#d7dde5;--text-dim:#7a8593;--text-muted:#4a5362;
+    --ok:#35c46b;--warn:#e0b74b;--err:#ef5350;--accent:#4f9dff;
+    --up:#35c46b;--down:#ef5350;
+    --r:6px;
   }
-  h1 { font-size: 24px; margin-bottom: 4px; color: #e6edf3; }
-  .subtitle { color: #7d8590; margin-bottom: 24px; font-size: 13px; }
-  .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 24px; }
-  .card {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 18px;
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--text);font-size:13px;line-height:1.45;
+    padding:20px;min-height:100vh;
   }
-  .card h2 {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #7d8590;
-    margin-bottom: 12px;
-    font-weight: 600;
+  .wrap{max-width:1400px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+  h1{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+  h1 .dim{color:var(--text-dim);font-weight:400;margin-left:8px}
+  .status-pill{font-size:11px;padding:3px 10px;border-radius:10px;font-weight:500}
+  .status-pill.ready{background:rgba(53,196,107,0.12);color:var(--ok)}
+  .status-pill.warn{background:rgba(224,183,75,0.12);color:var(--warn)}
+  .status-pill.err{background:rgba(239,83,80,0.12);color:var(--err)}
+
+  .toolbar{display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap;font-size:12px}
+  .toolbar label{color:var(--text-dim);display:flex;align-items:center;gap:6px;cursor:pointer}
+  .toolbar input[type="checkbox"]{accent-color:var(--accent)}
+  .toolbar button, .toolbar a.btn{
+    background:var(--panel);color:var(--text);border:1px solid var(--border);
+    padding:5px 11px;border-radius:var(--r);cursor:pointer;font-size:12px;
+    font-family:inherit;text-decoration:none;transition:background .15s;
   }
-  .stat-big {
-    font-size: 32px;
-    font-weight: 600;
-    color: #e6edf3;
-    line-height: 1.2;
+  .toolbar button:hover, .toolbar a.btn:hover{background:var(--panel-2);border-color:#2c3540}
+  .toolbar .sep{flex:1}
+  .toolbar .mini{color:var(--text-muted);font-size:11px}
+
+  .row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+  @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px}
+  .stat .lbl{color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px}
+  .stat .val{font-size:22px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+  .stat .sub{color:var(--text-muted);font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums}
+  .stat .val.up{color:var(--up)}
+  .stat .val.down{color:var(--down)}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+  .panel-hdr{padding:11px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel-2)}
+  .panel-hdr h2{font-size:12px;font-weight:600;color:var(--text);text-transform:uppercase;letter-spacing:0.06em}
+  .panel-hdr .hint{color:var(--text-muted);font-size:11px}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+  th{background:var(--panel-2);color:var(--text-dim);font-size:10px;
+     text-transform:uppercase;letter-spacing:0.05em;font-weight:600;
+     text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);
+     position:sticky;top:0;z-index:1}
+  td{padding:8px 10px;border-bottom:1px solid rgba(34,41,49,0.5)}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,0.015)}
+  .num{text-align:right}
+  .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px}
+
+  .pill{display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:500}
+  .pill.cons{background:rgba(79,157,255,0.15);color:#6eb3ff}
+  .pill.bal{background:rgba(161,140,209,0.15);color:#b39bd9}
+  .pill.agg{background:rgba(224,183,75,0.15);color:var(--warn)}
+  .pill.on{background:rgba(53,196,107,0.12);color:var(--ok)}
+  .pill.off{background:rgba(239,83,80,0.12);color:var(--err)}
+  .pill.high{background:rgba(53,196,107,0.14);color:var(--ok)}
+  .pill.med{background:rgba(224,183,75,0.14);color:var(--warn)}
+  .pill.low{background:rgba(239,83,80,0.14);color:var(--err)}
+
+  .up-color{color:var(--up)}
+  .down-color{color:var(--down)}
+  .dim{color:var(--text-dim)}
+  .muted{color:var(--text-muted)}
+  .reason{color:var(--text-muted);font-size:11px;font-style:italic;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+  .scroll{max-height:380px;overflow-y:auto}
+
+  .tabs{display:flex;gap:2px;margin-bottom:14px;border-bottom:1px solid var(--border)}
+  .tab{padding:8px 14px;cursor:pointer;color:var(--text-dim);font-size:12px;border:1px solid transparent;border-bottom:none;border-radius:5px 5px 0 0;background:transparent;font-family:inherit}
+  .tab:hover{color:var(--text)}
+  .tab.active{color:var(--text);background:var(--panel);border-color:var(--border);position:relative;top:1px}
+  .tab-content{display:none}
+  .tab-content.active{display:block}
+
+  .export-form{padding:14px 16px;display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+  .export-form label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text-dim)}
+  .export-form input, .export-form select{
+    background:var(--bg);color:var(--text);border:1px solid var(--border);
+    padding:5px 8px;border-radius:4px;font-size:12px;font-family:inherit;
   }
-  .stat-sub { color: #7d8590; font-size: 12px; margin-top: 2px; }
-  .ok { color: #3fb950; }
-  .warn { color: #d29922; }
-  .err { color: #f85149; }
-  .dim { color: #7d8590; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td {
-    padding: 6px 8px;
-    text-align: left;
-    border-bottom: 1px solid #21262d;
-    white-space: nowrap;
-  }
-  th { color: #7d8590; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .full-width { grid-column: 1 / -1; }
-  .pill {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 500;
-  }
-  .pill.on { background: #0d3320; color: #3fb950; }
-  .pill.off { background: #3a1515; color: #f85149; }
-  .pill.cons { background: #1f2937; color: #93c5fd; }
-  .pill.bal { background: #1f2937; color: #a78bfa; }
-  .pill.agg { background: #1f2937; color: #fbbf24; }
-  .pill.hi { background: #0d3320; color: #3fb950; }
-  .pill.med { background: #3a2f15; color: #d29922; }
-  .pill.lo { background: #3a1515; color: #f85149; }
-  .ctrl {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 12px;
-    font-size: 12px;
-    color: #7d8590;
-  }
-  .ctrl input[type="checkbox"] { vertical-align: middle; }
-  .ctrl a, .ctrl button {
-    color: #58a6ff;
-    text-decoration: none;
-    background: none;
-    border: 1px solid #30363d;
-    padding: 4px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-family: inherit;
-  }
-  .ctrl a:hover, .ctrl button:hover { background: #21262d; }
-  .error-banner {
-    background: #3a1515;
-    border: 1px solid #f85149;
-    color: #f85149;
-    padding: 10px 14px;
-    border-radius: 6px;
-    margin-bottom: 16px;
-    font-size: 13px;
-  }
-  .tape-row:hover { background: #161b22; }
-  .reason { color: #7d8590; font-size: 11px; font-style: italic; }
-  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
-  .footer { margin-top: 32px; text-align: center; color: #484f58; font-size: 11px; }
+
+  .q-sm{font-size:11px;color:var(--text-dim)}
+  .q-val{font-variant-numeric:tabular-nums}
+
+  footer{text-align:center;color:var(--text-muted);font-size:11px;padding:14px 0;margin-top:18px;border-top:1px solid var(--border)}
+
+  .spinner{display:inline-block;width:10px;height:10px;border:1.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite;vertical-align:middle;margin-right:5px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .err-box{background:rgba(239,83,80,0.08);border:1px solid rgba(239,83,80,0.3);color:var(--err);padding:10px 14px;border-radius:var(--r);margin-bottom:12px;font-size:12px}
 </style>
 </head>
 <body>
 
-<h1>poly-paper</h1>
-<div class="subtitle">
-  Polymarket paper trading — paper↔live parity, <span id="footer-version">loading…</span>
+<div class="wrap">
+
+<header>
+  <h1>poly-paper <span class="dim">v0.4</span></h1>
+  <div id="status-pill" class="status-pill warn">connecting…</div>
+</header>
+
+<div class="toolbar">
+  <label><input type="checkbox" id="autoref" checked> auto-refresh <span id="refsec">15</span>s</label>
+  <button onclick="refreshAll()">refresh</button>
+  <span class="sep"></span>
+  <a href="/metrics" target="_blank" class="btn">/metrics</a>
+  <a href="/pnl" target="_blank" class="btn">/pnl</a>
+  <a href="/tape" target="_blank" class="btn">/tape</a>
+  <a href="/weather-quality" target="_blank" class="btn">/weather-quality</a>
+  <span class="mini" id="last-upd">—</span>
 </div>
 
-<div class="ctrl">
-  <label>
-    <input type="checkbox" id="auto-refresh" checked>
-    Auto-refresh every <span id="refresh-n">10</span>s
-  </label>
-  <button onclick="refreshAll()">Refresh now</button>
-  <a href="/metrics" target="_blank">/metrics</a>
-  <a href="/tape" target="_blank">/tape</a>
-  <a href="/healthz" target="_blank">/healthz</a>
-  <span class="dim" id="last-refresh"></span>
-</div>
+<div id="err-zone"></div>
 
-<div id="errors"></div>
-
-<!-- Top summary cards -->
-<div class="grid">
-  <div class="card">
-    <h2>System status</h2>
-    <div class="stat-big" id="status-text">…</div>
-    <div class="stat-sub" id="status-sub"></div>
+<div class="row">
+  <div class="stat">
+    <div class="lbl">Realized P&amp;L</div>
+    <div class="val" id="stat-pnl">…</div>
+    <div class="sub" id="stat-pnl-sub">computing</div>
   </div>
-  <div class="card">
-    <h2>Markets in universe</h2>
-    <div class="stat-big" id="markets-count">…</div>
-    <div class="stat-sub">auto-discovered from Polymarket</div>
+  <div class="stat">
+    <div class="lbl">Win rate</div>
+    <div class="val" id="stat-wr">…</div>
+    <div class="sub" id="stat-wr-sub">resolved trades</div>
   </div>
-  <div class="card">
-    <h2>Fills — 24h</h2>
-    <div class="stat-big" id="fills-24h">…</div>
-    <div class="stat-sub" id="fills-breakdown"></div>
+  <div class="stat">
+    <div class="lbl">Fills 24h</div>
+    <div class="val" id="stat-fills">…</div>
+    <div class="sub" id="stat-fills-sub"></div>
   </div>
-  <div class="card">
-    <h2>Intents — 24h</h2>
-    <div class="stat-big" id="intents-24h">…</div>
-    <div class="stat-sub" id="intents-detail"></div>
+  <div class="stat">
+    <div class="lbl">Rebate income</div>
+    <div class="val" id="stat-rebate">…</div>
+    <div class="sub" id="stat-rebate-sub">maker fees earned</div>
   </div>
 </div>
 
-<!-- Sleeve health -->
-<div class="card full-width" style="margin-bottom: 20px;">
-  <h2>Sleeve health (last 24h)</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Sleeve</th>
-        <th>Stance</th>
-        <th>Strategy</th>
-        <th>Enabled</th>
-        <th class="num">Intents</th>
-        <th class="num">Fills</th>
-        <th class="num">Rejected</th>
-        <th class="num">High-conf</th>
-        <th class="num">Fees 24h</th>
-        <th class="num">Max $/trade</th>
-        <th class="num">Min edge</th>
-        <th class="num">Ver</th>
-      </tr>
-    </thead>
-    <tbody id="sleeve-body">
-      <tr><td colspan="12" class="dim">loading…</td></tr>
-    </tbody>
-  </table>
+<div class="tabs">
+  <button class="tab active" data-tab="sleeves">Sleeves</button>
+  <button class="tab" data-tab="pnl">P&amp;L per trade</button>
+  <button class="tab" data-tab="tape">Tape</button>
+  <button class="tab" data-tab="weather">Weather quality</button>
+  <button class="tab" data-tab="export">Export</button>
 </div>
 
-<!-- Recent tape -->
-<div class="card full-width">
-  <h2>Recent fills</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>Sleeve</th>
-        <th>Side</th>
-        <th>Type</th>
-        <th class="num">Price</th>
-        <th class="num">Shares</th>
-        <th>Confidence</th>
-        <th class="num">Fees</th>
-        <th class="num">Slippage</th>
-        <th>Reasoning</th>
-      </tr>
-    </thead>
-    <tbody id="tape-body">
-      <tr><td colspan="10" class="dim">loading…</td></tr>
-    </tbody>
-  </table>
+<div class="tab-content active" id="tab-sleeves">
+  <div class="panel">
+    <div class="panel-hdr"><h2>Sleeve health · last 24h</h2><span class="hint">fills / rejection / fees per sleeve</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Sleeve</th><th>Strategy</th><th>Stance</th>
+          <th class="num">Intents</th><th class="num">Fills</th><th class="num">Rej</th>
+          <th class="num">High-conf</th><th class="num">Fees 24h</th>
+          <th class="num">Max $</th><th class="num">Min edge</th><th>Ver</th>
+        </tr></thead>
+        <tbody id="sleeves-body"><tr><td colspan="11" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
-<div class="footer">
-  Last successful tick: <span id="last-tick-abs">—</span> ·
-  Readiness: <span id="readiness">—</span>
+<div class="tab-content" id="tab-pnl">
+  <div class="panel">
+    <div class="panel-hdr"><h2>P&amp;L by sleeve</h2><span class="hint">realized · mark-to-market · win rate</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Sleeve</th>
+          <th class="num">Trades</th><th class="num">Resolved</th><th class="num">Wins</th>
+          <th class="num">Win %</th>
+          <th class="num">Realized P&amp;L</th><th class="num">MTM P&amp;L</th>
+          <th class="num">Notional</th><th class="num">Fees</th>
+        </tr></thead>
+        <tbody id="pnl-by-sleeve"><tr><td colspan="9" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr"><h2>Recent trades · last 200</h2><span class="hint">entry price · size · outcome</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>When</th><th>Sleeve</th><th>Side</th>
+          <th class="num">Price</th><th class="num">Shares</th><th class="num">Cost</th>
+          <th class="num">Resolved</th><th class="num">P&amp;L</th><th>Status</th>
+        </tr></thead>
+        <tbody id="pnl-trades"><tr><td colspan="9" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-tape">
+  <div class="panel">
+    <div class="panel-hdr"><h2>Recent fills</h2><span class="hint">last 50 fills with reasoning</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>When</th><th>Sleeve</th><th>Side</th><th>Type</th>
+          <th class="num">Price</th><th class="num">Shares</th>
+          <th>Conf</th><th class="num">Fees</th>
+          <th>Reasoning</th>
+        </tr></thead>
+        <tbody id="tape-body"><tr><td colspan="9" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-weather">
+  <div class="panel">
+    <div class="panel-hdr"><h2>Forecast calibration · is data improving trades?</h2><span class="hint">Brier skill score vs climatology — positive = skill, negative = worse than baseline</span></div>
+    <div id="weather-body" style="padding:16px 18px">
+      <div class="dim">loading…</div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-export">
+  <div class="panel">
+    <div class="panel-hdr"><h2>Export data</h2><span class="hint">streaming CSV / JSON by date range</span></div>
+    <div class="export-form">
+      <label>Start date<input type="date" id="exp-start"></label>
+      <label>End date<input type="date" id="exp-end"></label>
+      <label>Table
+        <select id="exp-table">
+          <option value="all">all</option>
+          <option value="fills">fills</option>
+          <option value="intents">intents</option>
+          <option value="forecasts">forecasts</option>
+        </select>
+      </label>
+      <label>Format
+        <select id="exp-format">
+          <option value="csv">CSV</option>
+          <option value="json">JSON (NDJSON)</option>
+        </select>
+      </label>
+      <button onclick="doExport()">Download</button>
+    </div>
+    <div style="padding:0 18px 14px 18px;color:var(--text-muted);font-size:11px">
+      Streaming: paginated server-side, flushes as rows come in, does not block other endpoints.
+      Large ranges may take a minute — your browser will keep the connection open and save as it receives data.
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span id="footer-status">ready</span>
+</footer>
+
 </div>
 
 <script>
-const REFRESH_SECONDS = 10;
-document.getElementById("refresh-n").textContent = REFRESH_SECONDS;
+const REF_SEC=15;
+document.getElementById('refsec').textContent=REF_SEC;
 
-async function fetchJson(path) {
-  const r = await fetch(path);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
-  return await r.json();
-}
+function fmtUSD(v){if(v==null||isNaN(v))return'—';const n=Number(v);const sign=n<0?'-':'';return sign+'$'+Math.abs(n).toLocaleString(undefined,{maximumFractionDigits:2})}
+function fmtN(v){if(v==null)return'—';return Number(v).toLocaleString()}
+function fmtPct(v){if(v==null||isNaN(v))return'—';return Number(v).toFixed(1)+'%'}
+function pnlClass(v){if(v==null)return'';if(v>0)return'up-color';if(v<0)return'down-color';return''}
+function shortId(s){return s.replace(/^btc_up_down_/,'').replace(/^weather__/,'w-').replace(/^global_arb__/,'arb-').replace(/__conservative$/,'-c').replace(/__balanced$/,'-b').replace(/__aggressive$/,'-a')}
+function stanceP(s){return{'conservative':'cons','balanced':'bal','aggressive':'agg'}[s]||''}
+function confP(c){if(!c)return'—';return'<span class="pill '+c+'">'+c+'</span>'}
+function timeShort(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+function ageStr(iso){if(!iso)return'never';const s=(Date.now()-new Date(iso).getTime())/1000;if(s<60)return Math.round(s)+'s ago';if(s<3600)return Math.round(s/60)+'m ago';return(s/3600).toFixed(1)+'h ago'}
 
-function fmtUSD(n) {
-  if (n == null) return "—";
-  return "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-function fmtNum(n) {
-  if (n == null) return "—";
-  return Number(n).toLocaleString();
-}
-function shortSleeveId(s) {
-  return s.replace(/^btc_up_down_/, "").replace(/^weather__/, "w-").replace(/^ladder_arb__/, "ladder-");
-}
-function pillClass(stance) {
-  return { conservative: "cons", balanced: "bal", aggressive: "agg" }[stance] || "";
-}
-function confPill(conf) {
-  return `<span class="pill ${conf}">${conf || "—"}</span>`;
-}
+async function jget(p){const r=await fetch(p);if(!r.ok)throw new Error(p+': '+r.status);return r.json()}
+function showErr(msg){document.getElementById('err-zone').innerHTML='<div class="err-box">'+msg+'</div>'}
+function clearErr(){document.getElementById('err-zone').innerHTML=''}
 
-function ageString(iso) {
-  if (!iso) return "never";
-  const age = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (age < 60) return `${Math.round(age)}s ago`;
-  if (age < 3600) return `${Math.round(age / 60)}m ago`;
-  return `${(age / 3600).toFixed(1)}h ago`;
-}
-
-function showError(msg) {
-  const el = document.getElementById("errors");
-  el.innerHTML = `<div class="error-banner">${msg}</div>`;
-}
-function clearError() { document.getElementById("errors").innerHTML = ""; }
-
-async function refreshReadiness() {
-  try {
-    const r = await fetch("/readyz");
-    const d = await r.json();
-    const el = document.getElementById("readiness");
-    const status = document.getElementById("status-text");
-    const sub = document.getElementById("status-sub");
-    if (r.ok && d.status === "ready") {
-      el.innerHTML = `<span class="ok">ready</span>`;
-      status.innerHTML = `<span class="ok">● running</span>`;
-      sub.textContent = `Last tick ${ageString(d.last_tick_at)}`;
-    } else if (d.status === "warming_up") {
-      el.innerHTML = `<span class="warn">warming up</span>`;
-      status.innerHTML = `<span class="warn">● warming</span>`;
-      sub.textContent = "waiting for first tick";
-    } else {
-      el.innerHTML = `<span class="err">stale</span>`;
-      status.innerHTML = `<span class="err">● stale</span>`;
-      sub.textContent = `last tick ${ageString(d.last_tick_at)} (exceeds tolerance)`;
-    }
-    document.getElementById("last-tick-abs").textContent = d.last_tick_at || "never";
-  } catch (e) {
-    document.getElementById("readiness").innerHTML = `<span class="err">unreachable</span>`;
-    document.getElementById("status-text").innerHTML = `<span class="err">● down</span>`;
+async function refreshStatus(){
+  try{
+    const r=await fetch('/readyz');const d=await r.json();
+    const p=document.getElementById('status-pill');
+    if(r.ok&&d.status==='ready'){p.className='status-pill ready';p.textContent='running · last tick '+ageStr(d.last_tick_at)}
+    else if(d.status==='warming_up'){p.className='status-pill warn';p.textContent='warming up'}
+    else{p.className='status-pill err';p.textContent='stale · '+ageStr(d.last_tick_at)}
+    document.getElementById('footer-status').textContent=d.status||'—';
+  }catch(e){
+    const p=document.getElementById('status-pill');p.className='status-pill err';p.textContent='unreachable';
   }
 }
 
-async function refreshMetrics() {
-  try {
-    const m = await fetchJson("/metrics");
-    document.getElementById("markets-count").textContent = fmtNum(m.markets_in_universe || 0);
+async function refreshMetrics(){
+  try{
+    const m=await jget('/metrics');
+    const sl=m.sleeves||[];
+    let intents=0,fills=0,rej=0,fees=0;
+    sl.forEach(s=>{intents+=s.intents_24h;fills+=s.fills_24h;rej+=s.rejected_24h;fees+=s.fees_24h_usd});
+    document.getElementById('stat-fills').textContent=fmtN(fills);
+    document.getElementById('stat-fills-sub').innerHTML='<span class="dim">'+fmtN(intents)+' intents · '+fmtN(rej)+' rejected</span>';
+    const rebate=-fees;
+    const rebEl=document.getElementById('stat-rebate');
+    rebEl.innerHTML='<span class="'+(rebate>0?'up':'down')+'-color">'+fmtUSD(rebate)+'</span>';
+    document.getElementById('stat-rebate-sub').textContent=rebate>0?'positive — we post-only':'net taker fees';
 
-    const tbody = document.getElementById("sleeve-body");
-    if (!m.sleeves || m.sleeves.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="12" class="dim">no sleeves seeded</td></tr>`;
+    const body=sl.map(s=>{
+      const hq=s.fills_24h>0?s.high_conf_fill_pct:null;
+      const hqCls=hq==null?'dim':(hq>=60?'up-color':(hq>=30?'':'down-color'));
+      return '<tr>'+
+        '<td class="mono">'+shortId(s.sleeve_id)+'</td>'+
+        '<td class="dim">'+s.strategy+'</td>'+
+        '<td><span class="pill '+stanceP(s.stance)+'">'+s.stance+'</span></td>'+
+        '<td class="num">'+fmtN(s.intents_24h)+'</td>'+
+        '<td class="num">'+fmtN(s.fills_24h)+'</td>'+
+        '<td class="num">'+fmtN(s.rejected_24h)+'</td>'+
+        '<td class="num '+hqCls+'">'+(hq==null?'—':hq+'%')+'</td>'+
+        '<td class="num '+(s.fees_24h_usd<0?'up-color':'')+'">'+fmtUSD(s.fees_24h_usd)+'</td>'+
+        '<td class="num">'+fmtUSD(s.max_position_usd)+'</td>'+
+        '<td class="num dim">'+s.min_edge_bps+'bp</td>'+
+        '<td class="dim">v'+s.version+'</td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('sleeves-body').innerHTML=body||'<tr><td colspan="11" class="dim" style="padding:20px;text-align:center">no sleeves seeded</td></tr>';
+    clearErr();
+  }catch(e){showErr('/metrics failed: '+e.message)}
+}
+
+async function refreshPnl(){
+  try{
+    const d=await jget('/pnl');
+    const sl=d.sleeves||[];
+    let totalRealized=0,totalWins=0,totalRes=0;
+    sl.forEach(s=>{totalRealized+=s.realized_pnl_usd||0;totalWins+=s.n_wins||0;totalRes+=s.n_resolved||0});
+
+    const pnlEl=document.getElementById('stat-pnl');
+    pnlEl.textContent=fmtUSD(totalRealized);
+    pnlEl.className='val '+(totalRealized>0?'up':(totalRealized<0?'down':''));
+    document.getElementById('stat-pnl-sub').textContent=fmtN(totalRes)+' resolved trades';
+    const wr=totalRes>0?(100*totalWins/totalRes):null;
+    const wrEl=document.getElementById('stat-wr');
+    wrEl.textContent=wr==null?'—':fmtPct(wr);
+    wrEl.className='val '+(wr>=50?'up':(wr!=null?'down':''));
+    document.getElementById('stat-wr-sub').textContent=fmtN(totalWins)+' wins / '+fmtN(totalRes);
+
+    const bySleeve=sl.map(s=>{
+      const pnlR=s.realized_pnl_usd||0;
+      const pnlM=s.mtm_pnl_usd||0;
+      return '<tr>'+
+        '<td class="mono">'+shortId(s.sleeve_id)+'</td>'+
+        '<td class="num">'+fmtN(s.n_trades)+'</td>'+
+        '<td class="num">'+fmtN(s.n_resolved)+'</td>'+
+        '<td class="num">'+fmtN(s.n_wins)+'</td>'+
+        '<td class="num">'+(s.win_rate_pct==null?'—':fmtPct(s.win_rate_pct))+'</td>'+
+        '<td class="num '+pnlClass(pnlR)+'">'+fmtUSD(pnlR)+'</td>'+
+        '<td class="num '+pnlClass(pnlM)+'">'+fmtUSD(pnlM)+'</td>'+
+        '<td class="num">'+fmtUSD(s.total_notional_usd)+'</td>'+
+        '<td class="num '+(s.total_fees_usd<0?'up-color':'')+'">'+fmtUSD(s.total_fees_usd)+'</td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('pnl-by-sleeve').innerHTML=bySleeve||'<tr><td colspan="9" class="dim" style="padding:20px;text-align:center">no trades yet</td></tr>';
+
+    const tr=(d.trades||[]).map(t=>{
+      const pnl=t.pnl_usd;
+      const statusPill=t.status==='resolved'?(t.won?'<span class="pill high">won</span>':'<span class="pill low">lost</span>'):'<span class="pill med">'+t.status+'</span>';
+      return '<tr>'+
+        '<td class="dim">'+timeShort(t.created_at)+'</td>'+
+        '<td class="mono">'+shortId(t.sleeve_id)+'</td>'+
+        '<td>'+t.side+'</td>'+
+        '<td class="num">'+(t.price==null?'—':t.price.toFixed(4))+'</td>'+
+        '<td class="num">'+(t.shares==null?'—':t.shares.toFixed(0))+'</td>'+
+        '<td class="num">'+fmtUSD(t.cost_usd)+'</td>'+
+        '<td class="num">'+(t.resolved_value==null?'—':t.resolved_value.toFixed(4))+'</td>'+
+        '<td class="num '+pnlClass(pnl)+'">'+fmtUSD(pnl)+'</td>'+
+        '<td>'+statusPill+'</td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('pnl-trades').innerHTML=tr||'<tr><td colspan="9" class="dim" style="padding:20px;text-align:center">no trades yet</td></tr>';
+  }catch(e){console.warn('pnl failed',e)}
+}
+
+async function refreshTape(){
+  try{
+    const t=await jget('/tape');
+    const rows=(t||[]).map(f=>{
+      const price=f.rejected?'—':(f.avg_price?Number(f.avg_price).toFixed(4):'—');
+      const shares=f.rejected?'—':(f.filled_size_shares?Number(f.filled_size_shares).toFixed(0):'—');
+      const reason=(f.reasoning||f.notes||'').substring(0,140);
+      return '<tr>'+
+        '<td class="dim">'+timeShort(f.created_at)+'</td>'+
+        '<td class="mono">'+shortId(f.sleeve_id)+'</td>'+
+        '<td>'+f.side+'</td>'+
+        '<td class="dim">'+f.order_type+'</td>'+
+        '<td class="num">'+price+'</td>'+
+        '<td class="num">'+shares+'</td>'+
+        '<td>'+(f.rejected?'<span class="pill off">REJ</span>':confP(f.confidence))+'</td>'+
+        '<td class="num '+(f.fees_usd&&Number(f.fees_usd)<0?'up-color':'')+'">'+fmtUSD(f.fees_usd)+'</td>'+
+        '<td><span class="reason" title="'+(reason||'').replace(/"/g,'&quot;')+'">'+reason+'</span></td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('tape-body').innerHTML=rows||'<tr><td colspan="9" class="dim" style="padding:20px;text-align:center">no fills yet</td></tr>';
+  }catch(e){console.warn('tape failed',e)}
+}
+
+async function refreshWeather(){
+  try{
+    const d=await jget('/weather-quality');
+    const slices=d.slices||[];
+    if(slices.length===0){
+      document.getElementById('weather-body').innerHTML='<div class="dim">no weather forecasts recorded yet. Run the weather strategy a while to accumulate data; resolved markets will then appear here with calibration metrics.</div>';
       return;
     }
-
-    let totalIntents = 0, totalFills = 0, totalRej = 0, totalFees = 0;
-    const rows = m.sleeves.map(s => {
-      totalIntents += s.intents_24h;
-      totalFills += s.fills_24h;
-      totalRej += s.rejected_24h;
-      totalFees += s.fees_24h_usd;
-      const hqPct = s.high_conf_fill_pct;
-      const hqClass = hqPct >= 80 ? "ok" : (hqPct >= 50 ? "warn" : "err");
-      const hqDisplay = s.fills_24h > 0 ? `<span class="${hqClass}">${hqPct}%</span>` : "—";
-      return `
-        <tr>
-          <td><code>${shortSleeveId(s.sleeve_id)}</code></td>
-          <td><span class="pill ${pillClass(s.stance)}">${s.stance}</span></td>
-          <td>${s.strategy}</td>
-          <td><span class="pill ${s.enabled ? 'on' : 'off'}">${s.enabled ? 'on' : 'off'}</span></td>
-          <td class="num">${fmtNum(s.intents_24h)}</td>
-          <td class="num">${fmtNum(s.fills_24h)}</td>
-          <td class="num">${fmtNum(s.rejected_24h)}</td>
-          <td class="num">${hqDisplay}</td>
-          <td class="num">${fmtUSD(s.fees_24h_usd)}</td>
-          <td class="num">${fmtUSD(s.max_position_usd)}</td>
-          <td class="num">${s.min_edge_bps} bp</td>
-          <td class="num dim">v${s.version}</td>
-        </tr>
-      `;
-    }).join("");
-    tbody.innerHTML = rows;
-
-    document.getElementById("intents-24h").textContent = fmtNum(totalIntents);
-    document.getElementById("intents-detail").textContent =
-      totalIntents === 0 ? "no edges found — system refusing to trade" : `across ${m.sleeves.filter(s=>s.intents_24h>0).length} active sleeves`;
-    document.getElementById("fills-24h").textContent = fmtNum(totalFills);
-    document.getElementById("fills-breakdown").innerHTML =
-      totalFills > 0
-        ? `<span class="dim">${totalRej} rejected · ${fmtUSD(totalFees)} fees</span>`
-        : "no fills yet";
-
-    clearError();
-  } catch (e) {
-    showError(`Failed to load /metrics: ${e.message}`);
-  }
+    const html=slices.map(s=>{
+      const c=s.calibration;
+      const ngrCard=s.ngr
+        ? '<div style="display:inline-block;background:var(--panel-2);padding:8px 12px;border-radius:4px;margin-right:8px;margin-bottom:8px">'+
+          '<div class="q-sm">NGR fit · '+s.ngr.n_samples+' samples</div>'+
+          '<div class="q-val '+(s.ngr.improvement_pct>0?'up-color':'down-color')+'">CRPS '+(s.ngr.improvement_pct>0?'+':'')+s.ngr.improvement_pct+'% vs raw</div>'+
+          '<div class="q-sm">raw '+s.ngr.crps_raw+' → ngr '+s.ngr.crps_ngr+'</div>'+
+          '</div>'
+        : '<div style="display:inline-block;background:var(--panel-2);padding:8px 12px;border-radius:4px;margin-right:8px;margin-bottom:8px;opacity:0.6">'+
+          '<div class="q-sm">NGR fit · not yet trained</div>'+
+          '<div class="q-val dim">waiting for resolved forecasts</div>'+
+          '</div>';
+      const calibCard=c
+        ? '<div style="display:inline-block;background:var(--panel-2);padding:8px 12px;border-radius:4px;margin-right:8px;margin-bottom:8px">'+
+          '<div class="q-sm">Brier Skill Score · '+c.n_resolved+' resolved</div>'+
+          '<div class="q-val '+(c.brier_skill_score>0?'up-color':'down-color')+'">'+(c.brier_skill_score>0?'+':'')+c.brier_skill_score+'</div>'+
+          '<div class="q-sm">Brier '+c.brier+' vs climatology '+c.brier_climatology+'</div>'+
+          '</div>'+
+          '<div style="display:inline-block;background:var(--panel-2);padding:8px 12px;border-radius:4px;margin-right:8px;margin-bottom:8px">'+
+          '<div class="q-sm">AUC · sharpness</div>'+
+          '<div class="q-val">'+(c.auc==null?'—':c.auc)+' · '+c.sharpness+'</div>'+
+          '<div class="q-sm">base rate '+(c.base_rate*100).toFixed(0)+'%</div>'+
+          '</div>'
+        : '<div style="display:inline-block;background:var(--panel-2);padding:8px 12px;border-radius:4px;margin-right:8px;margin-bottom:8px;opacity:0.6">'+
+          '<div class="q-sm">calibration</div>'+
+          '<div class="q-val dim">need 20+ resolved</div>'+
+          '<div class="q-sm">'+s.resolved+'/'+s.total+' resolved so far</div>'+
+          '</div>';
+      return '<div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px dashed var(--border)">'+
+        '<div style="font-weight:600;margin-bottom:6px">'+s.city+' · '+s.kind+'</div>'+
+        ngrCard+calibCard+
+        '</div>';
+    }).join('');
+    document.getElementById('weather-body').innerHTML=html;
+  }catch(e){console.warn('weather failed',e)}
 }
 
-async function refreshTape() {
-  try {
-    const t = await fetchJson("/tape");
-    const tbody = document.getElementById("tape-body");
-    if (!t || t.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="dim">no trades yet</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = t.map(f => {
-      const when = new Date(f.created_at).toLocaleTimeString();
-      const price = f.rejected ? "—" : (f.avg_price ? Number(f.avg_price).toFixed(4) : "—");
-      const shares = f.rejected ? "—" : (f.filled_size_shares ? Number(f.filled_size_shares).toFixed(0) : "—");
-      const reason = (f.reasoning || f.notes || "").substring(0, 120);
-      return `
-        <tr class="tape-row">
-          <td class="dim">${when}</td>
-          <td><code>${shortSleeveId(f.sleeve_id)}</code></td>
-          <td>${f.side}</td>
-          <td>${f.order_type}</td>
-          <td class="num">${price}</td>
-          <td class="num">${shares}</td>
-          <td>${f.rejected ? '<span class="pill off">REJ</span>' : confPill(f.confidence)}</td>
-          <td class="num">${fmtUSD(f.fees_usd)}</td>
-          <td class="num">${f.slippage_bps || 0} bp</td>
-          <td class="reason">${reason}</td>
-        </tr>
-      `;
-    }).join("");
-  } catch (e) {
-    showError(`Failed to load /tape: ${e.message}`);
-  }
+function doExport(){
+  const s=document.getElementById('exp-start').value;
+  const e=document.getElementById('exp-end').value;
+  const t=document.getElementById('exp-table').value;
+  const f=document.getElementById('exp-format').value;
+  const params=new URLSearchParams({table:t,format:f});
+  if(s)params.set('start',s);
+  if(e)params.set('end',e);
+  window.location.href='/export?'+params.toString();
+}
+(function(){
+  const today=new Date();
+  const ago=new Date(today.getTime()-7*24*60*60*1000);
+  document.getElementById('exp-end').value=today.toISOString().slice(0,10);
+  document.getElementById('exp-start').value=ago.toISOString().slice(0,10);
+})();
+
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('tab-'+t.dataset.tab).classList.add('active');
+  });
+});
+
+async function refreshAll(){
+  document.getElementById('last-upd').innerHTML='<span class="spinner"></span>refreshing';
+  await Promise.all([refreshStatus(),refreshMetrics(),refreshPnl(),refreshTape(),refreshWeather()]);
+  document.getElementById('last-upd').textContent='updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 
-async function refreshAll() {
-  document.getElementById("last-refresh").textContent = `refreshing…`;
-  await Promise.all([refreshReadiness(), refreshMetrics(), refreshTape()]);
-  document.getElementById("last-refresh").textContent = `updated ${new Date().toLocaleTimeString()}`;
+let timer=null;
+function setupAuto(){
+  if(timer)clearInterval(timer);
+  if(document.getElementById('autoref').checked){timer=setInterval(refreshAll,REF_SEC*1000)}
 }
-
-let intervalId = null;
-function setupAutoRefresh() {
-  if (intervalId) clearInterval(intervalId);
-  if (document.getElementById("auto-refresh").checked) {
-    intervalId = setInterval(refreshAll, REFRESH_SECONDS * 1000);
-  }
-}
-document.getElementById("auto-refresh").addEventListener("change", setupAutoRefresh);
+document.getElementById('autoref').addEventListener('change',setupAuto);
 
 refreshAll();
-setupAutoRefresh();
+setupAuto();
 </script>
 
 </body>

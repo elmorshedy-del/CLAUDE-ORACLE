@@ -71,17 +71,35 @@ CLOB = "https://clob.polymarket.com"
 
 
 async def _fetch_candidate_events(client: httpx.AsyncClient) -> list[dict]:
-    """Pull neg_risk events across tags. These are guaranteed mutually exclusive."""
+    """Pull neg_risk events across ALL major Polymarket tags.
+
+    These are guaranteed mutually exclusive and candidates for bundle arb.
+    Bundle/ladder arb is strategy-agnostic — it doesn't care if the market is
+    about BTC or presidential elections, only whether the math works. So we
+    scan the entire universe, not just sleeves-I've-seeded-for.
+    """
     events: list[dict] = []
     seen: set[str] = set()
-    for tag in ["sports", "politics", "elections", "culture", "tennis", "nba", "nhl", "mlb"]:
+    # Full coverage: sports, politics, geo, weather, crypto, economics, culture.
+    tags = [
+        "sports", "politics", "elections", "culture",
+        "tennis", "nba", "nhl", "mlb", "nfl", "soccer", "mma", "boxing",
+        "weather", "natural-disasters", "climate",
+        "crypto", "bitcoin", "ethereum",
+        "economy", "finance", "business",
+        "technology", "ai", "science",
+        "entertainment", "awards",
+        "geopolitics", "world",
+    ]
+    for tag in tags:
         try:
             r = await client.get(
                 f"{GAMMA}/events",
                 params={"active": "true", "closed": "false", "tag_slug": tag, "limit": 100},
-                headers={"User-Agent": "poly-paper/0.2"},
+                headers={"User-Agent": "poly-paper/0.3"},
             )
-            r.raise_for_status()
+            if r.status_code != 200:
+                continue
             for ev in r.json():
                 eid = ev.get("id")
                 if eid and eid not in seen:

@@ -142,6 +142,53 @@ def default_btc_up_down_sleeves(
     ]
 
 
+def default_btc_up_down_split_sleeves(
+    *,
+    strategy_family: str,
+    total_bankroll_usd: Decimal,
+) -> list[SleeveConfig]:
+    """Split sleeves: separate Up-only and Down-only per stance.
+
+    Stored in the extra_json column:
+        {"direction_filter": "Up"}  or  {"direction_filter": "Down"}
+
+    Evaluator reads this and ONLY considers the chosen side, giving each
+    direction its own risk budget and edge gate. Prevents the strategy from
+    silently concentrating 100% on whichever side has any momentum.
+
+    Six sleeves per family (3 stances × 2 directions). With 2 families
+    (5m + 15m) = 12 BTC sleeves total, plus the 3 weather sleeves = 15 total.
+    """
+    bank = total_bankroll_usd
+    base_defs = [
+        ("conservative", SleeveStance.CONSERVATIVE, Decimal("0.005"), 300, 300, 0,
+         "post-only, 3% edge"),
+        ("balanced", SleeveStance.BALANCED, Decimal("0.015"), 150, 150, 50,
+         "limit+post-only, 1.5% edge"),
+        ("aggressive", SleeveStance.AGGRESSIVE, Decimal("0.030"), 80, 50, 200,
+         "taker allowed, 0.8% net / 0.5% gross edge"),
+    ]
+    out: list[SleeveConfig] = []
+    for stance_name, stance, size_pct, min_net, min_gross, max_cross, note in base_defs:
+        for direction in ("up", "down"):
+            sid = f"{strategy_family}__{stance_name}__{direction}"
+            out.append(SleeveConfig(
+                sleeve_id=sid,
+                stance=stance,
+                strategy_name="btc_up_down",
+                market_selector=f"strategy_family={strategy_family}",
+                bankroll_usd=bank,
+                max_position_usd=bank * size_pct,
+                min_edge_bps=min_net,
+                min_gross_edge_bps=min_gross,
+                max_cross_spread_bps=max_cross,
+                enabled=True,
+                version=1,
+                notes=f"{stance_name.capitalize()} BTC {direction.upper()}-only: {note}",
+            ))
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Core evaluation
 # ---------------------------------------------------------------------------
@@ -191,8 +238,29 @@ def evaluate(
     edge_up = p_up - ask_up           # gross EV of buying UP at ask
     edge_dn = p_down - ask_dn         # gross EV of buying DOWN at ask
 
-    # Pick the better side.
-    if edge_up >= edge_dn:
+    # 3b) Check for direction filter — split sleeves restrict to ONE side.
+    # The filter is encoded in the sleeve_id suffix ("__up" or "__down").
+    # Falls through to "both" for legacy sleeves that don't have the suffix.
+    direction_filter: str | None = None
+    if sleeve.sleeve_id.endswith("__up"):
+        direction_filter = "Up"
+    elif sleeve.sleeve_id.endswith("__down"):
+        direction_filter = "Down"
+
+    if direction_filter == "Up":
+        chosen = "Up"
+        gross_edge = edge_up
+        exec_price = ask_up
+        p_win = p_up
+        book = book_up
+    elif direction_filter == "Down":
+        chosen = "Down"
+        gross_edge = edge_dn
+        exec_price = ask_dn
+        p_win = p_down
+        book = book_dn
+    elif edge_up >= edge_dn:
+        # Legacy: pick the better side.
         chosen = "Up"
         gross_edge = edge_up
         exec_price = ask_up
@@ -219,13 +287,14 @@ def evaluate(
 
     # Option B: post-only one tick inside the spread on our side (improves top of book).
     # For a BUY order, "improve" = higher than current best bid.
+    # Use quantized cents — float arithmetic (ask - tick) produces junk like
+    # 0.45999999999999996, which would land the order BEHIND top-of-book and
+    # never fill. `maker_post_price` returns a proper Decimal on the tick grid.
+    from ..pricing import maker_post_price
     best_bid = float(book.best_bid) if book.best_bid is not None else 0.0
     best_ask_side = float(book.best_ask) if book.best_ask is not None else 1.0
-    tick = 0.01  # Polymarket's min tick on most markets; we confirm per-market in Phase 3.
-    post_price = min(best_bid + tick, best_ask_side - tick)
-    if post_price <= 0 or post_price >= 1:
-        # Can't post inside; fall back to taker consideration only.
-        post_price = 0.0
+    post_price_dec = maker_post_price(best_bid, best_ask_side) if best_bid > 0 else None
+    post_price = float(post_price_dec) if post_price_dec is not None else 0.0
     # Maker rebate is positive for us (cash received). Net gain on fill:
     #   (p_win - post_price) + rebate
     # Rebate rate: 25% of taker fee at post_price.
@@ -281,16 +350,17 @@ def evaluate(
         )
 
     # 6) Build the intent.
+    from ..pricing import quantize_cents, clamp_price
     size_usd = sleeve.max_position_usd
     if route == "maker":
         order_type = OrderType.POST_ONLY
-        limit_price = Decimal(str(post_price))
-        used_price = post_price
+        limit_price = clamp_price(post_price)  # already quantized, this ensures bounds
+        used_price = float(limit_price)
         used_net_edge_bps = net_edge_maker_bps
     else:
         order_type = OrderType.LIMIT  # LIMIT at the current ask → executes as taker
-        limit_price = Decimal(str(exec_price))
-        used_price = exec_price
+        limit_price = clamp_price(exec_price)
+        used_price = float(limit_price)
         used_net_edge_bps = net_edge_taker_bps
 
     intent = OrderIntent(

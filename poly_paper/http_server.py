@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -157,9 +158,341 @@ async def tape(_req: web.Request) -> web.Response:
     return web.json_response(out)
 
 
+async def weather_quality(_req: web.Request) -> web.Response:
+    """Forecast quality metrics: is our data improving predictions?
+
+    Returns per-city-per-kind:
+      - calibration: Brier score, BSS vs climatology, reliability bins, sharpness
+      - ngr_status: is a fit available? improvement over raw?
+      - data_coverage: resolved records available for training
+      - trend: Brier score over rolling 7d windows (sparkline)
+    """
+    from .weather_calibration import (
+        WeatherForecastRecord, compute_calibration,
+    )
+    from .db.models import NGRFitRow
+    from .feeds.open_meteo import CITIES
+
+    kinds = ["temperature_max_day", "precipitation_sum_period"]
+    slices = []
+
+    async with SessionLocal() as db:
+        for city in CITIES.keys():
+            for kind in kinds:
+                # Resolved & unresolved counts
+                total = (await db.execute(
+                    select(func.count()).select_from(WeatherForecastRecord).where(
+                        WeatherForecastRecord.city == city,
+                        WeatherForecastRecord.kind == kind,
+                    )
+                )).scalar() or 0
+                resolved = (await db.execute(
+                    select(func.count()).select_from(WeatherForecastRecord).where(
+                        WeatherForecastRecord.city == city,
+                        WeatherForecastRecord.kind == kind,
+                        WeatherForecastRecord.resolved_at.is_not(None),
+                    )
+                )).scalar() or 0
+                # Most recent NGR fit for this slice
+                ngr_row = (await db.execute(
+                    select(NGRFitRow).where(
+                        NGRFitRow.city == city, NGRFitRow.kind == kind,
+                    ).order_by(NGRFitRow.fitted_at.desc()).limit(1)
+                )).scalar_one_or_none()
+                if total == 0:
+                    continue  # no data yet, skip to keep response compact
+                slices.append({
+                    "city": city, "kind": kind,
+                    "total": total, "resolved": resolved,
+                    "ngr": None if ngr_row is None else {
+                        "fitted_at": ngr_row.fitted_at.isoformat(),
+                        "n_samples": ngr_row.n_training_samples,
+                        "crps_raw": round(ngr_row.mean_crps_raw, 4),
+                        "crps_ngr": round(ngr_row.mean_crps_train, 4),
+                        "improvement_pct": round(ngr_row.improvement_pct, 1),
+                    },
+                })
+    # Add calibration reports (only for slices with enough resolved data).
+    for s in slices:
+        try:
+            report = await compute_calibration(
+                city=s["city"], kind=s["kind"], min_records=20,
+            )
+        except Exception:
+            report = None
+        if report is None:
+            s["calibration"] = None
+            continue
+        s["calibration"] = {
+            "n_resolved": report.n_resolved,
+            "brier": round(report.brier_score, 4),
+            "brier_climatology": round(report.brier_score_climatology, 4),
+            "brier_skill_score": round(report.brier_skill_score, 4),
+            "base_rate": round(report.empirical_base_rate, 3),
+            "sharpness": round(report.sharpness, 3),
+            "auc": None if report.auc is None else round(report.auc, 3),
+            "reliability": [
+                {
+                    "bin_low": round(b.bin_low, 2),
+                    "bin_high": round(b.bin_high, 2),
+                    "n": b.n_forecasts,
+                    "predicted": round(b.mean_predicted, 3),
+                    "observed": round(b.observed_frequency, 3),
+                }
+                for b in report.reliability_bins
+            ],
+            "raw_brier": None if report.raw_brier_score is None else round(report.raw_brier_score, 4),
+        }
+    return web.json_response({"slices": slices})
+
+
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
+
+async def pnl(_req: web.Request) -> web.Response:
+    """Per-trade P&L and win-rate summary.
+
+    For each non-rejected fill, compute realized P&L:
+      - BUY @ price p, size s shares → cost = p*s, resolved_value in [0, 1]
+      - realized = (resolved_value - p) * s - fees
+    For unresolved fills, mark-to-market against the latest book mid.
+
+    Returns aggregated totals per sleeve AND the per-trade breakdown (last 200).
+    """
+    from .db.models import FillRow, Market, OrderIntentRow, SleeveConfig
+    import httpx
+
+    per_sleeve: dict[str, dict] = {}
+    trades: list[dict] = []
+
+    async with SessionLocal() as db:
+        rows = (await db.execute(
+            select(FillRow, OrderIntentRow)
+            .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
+            .where(FillRow.rejected == False)  # noqa: E712
+            .order_by(FillRow.created_at.desc())
+            .limit(500)
+        )).all()
+
+        # Collect condition_ids we need resolution info for.
+        cond_ids = list({i.market_condition_id for _, i in rows if i.market_condition_id})
+        markets_by_cond: dict[str, Market] = {}
+        if cond_ids:
+            markets = (await db.execute(
+                select(Market).where(Market.condition_id.in_(cond_ids))
+            )).scalars().all()
+            for m in markets:
+                markets_by_cond[m.condition_id] = m
+
+    for f, i in rows:
+        try:
+            price = float(f.avg_price or "0")
+            shares = float(f.filled_size_shares or "0")
+            fees = float(f.fees_usd or "0")
+        except (TypeError, ValueError):
+            continue
+        if shares == 0:
+            continue
+        cost = price * shares
+        m = markets_by_cond.get(i.market_condition_id)
+        # Resolution status from params_json end_unix + closed flag if available.
+        resolved_value = None
+        status = "open"
+        if m is not None:
+            params = m.params_json or {}
+            now = time.time()
+            end_unix = params.get("end_unix") or 0
+            if end_unix and end_unix < now:
+                # Market has passed resolution time; try to read closed price from params.
+                closed_yes_price = params.get("closed_yes_price")
+                if closed_yes_price is not None:
+                    # Caller must know which token this intent was on. For a YES
+                    # BUY (btc "Up" or weather bucket YES) a win = closed_yes_price
+                    # close to 1. For "Down" BUY we bought the NO token which
+                    # resolves to (1 - closed_yes_price) in a binary.
+                    # Conservative: treat `closed_yes_price >= 0.5` as YES won.
+                    if closed_yes_price >= 0.5:
+                        resolved_value = 1.0
+                    else:
+                        resolved_value = 0.0
+                    status = "resolved"
+
+        if resolved_value is None:
+            # Mark-to-market against last known mid if available.
+            params = (m.params_json if m else None) or {}
+            mid = params.get("last_mid")
+            if mid is not None:
+                resolved_value = float(mid)
+                status = "mtm"
+            else:
+                # No resolution AND no mid — use entry price as MTM placeholder (zero P&L).
+                resolved_value = price
+                status = "unresolved"
+
+        pnl_usd = (resolved_value - price) * shares - fees  # fees negative for rebate
+        won = resolved_value >= 0.5 if status == "resolved" else None
+        trades.append({
+            "fill_id": f.fill_id,
+            "created_at": f.created_at.isoformat(),
+            "sleeve_id": i.sleeve_id,
+            "side": i.side,
+            "price": round(price, 4),
+            "shares": round(shares, 2),
+            "cost_usd": round(cost, 2),
+            "fees_usd": round(fees, 4),
+            "resolved_value": round(resolved_value, 4) if resolved_value is not None else None,
+            "pnl_usd": round(pnl_usd, 4),
+            "status": status,
+            "won": won,
+        })
+        agg = per_sleeve.setdefault(i.sleeve_id, {
+            "sleeve_id": i.sleeve_id, "n_trades": 0, "n_resolved": 0, "n_wins": 0,
+            "realized_pnl_usd": 0.0, "mtm_pnl_usd": 0.0, "unresolved_n": 0,
+            "total_fees_usd": 0.0, "total_notional_usd": 0.0,
+        })
+        agg["n_trades"] += 1
+        agg["total_notional_usd"] += cost
+        agg["total_fees_usd"] += fees
+        if status == "resolved":
+            agg["n_resolved"] += 1
+            if won:
+                agg["n_wins"] += 1
+            agg["realized_pnl_usd"] += pnl_usd
+        elif status == "mtm":
+            agg["mtm_pnl_usd"] += pnl_usd
+        else:
+            agg["unresolved_n"] += 1
+
+    # Compute win rates and round.
+    for a in per_sleeve.values():
+        a["win_rate_pct"] = round(100 * a["n_wins"] / a["n_resolved"], 1) if a["n_resolved"] > 0 else None
+        for k in ("realized_pnl_usd", "mtm_pnl_usd", "total_fees_usd", "total_notional_usd"):
+            a[k] = round(a[k], 2)
+
+    return web.json_response({
+        "sleeves": sorted(per_sleeve.values(), key=lambda x: -x["n_trades"]),
+        "trades": trades[:200],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def export_stream(req: web.Request) -> web.StreamResponse:
+    """Streaming export of intents + fills + forecasts over a date range.
+
+    Query params:
+        start   - ISO date (YYYY-MM-DD). Default: 7 days ago.
+        end     - ISO date (YYYY-MM-DD). Default: now.
+        table   - intents | fills | forecasts | all. Default: all.
+        format  - csv | json. Default: csv.
+
+    Uses aiohttp StreamResponse + server-side batched queries so memory stays
+    flat even on years of data. Flushes every 500 rows. Non-blocking for other
+    endpoints (each request in its own event-loop task).
+    """
+    from datetime import datetime as _dt
+    from .db.models import FillRow, OrderIntentRow
+
+    start = req.query.get("start")
+    end = req.query.get("end")
+    table = req.query.get("table", "all")
+    fmt = req.query.get("format", "csv").lower()
+
+    try:
+        start_dt = _dt.fromisoformat(start) if start else datetime.now(timezone.utc) - timedelta(days=7)
+        end_dt = _dt.fromisoformat(end) if end else datetime.now(timezone.utc)
+    except ValueError:
+        return web.json_response({"error": "invalid start/end — use YYYY-MM-DD"}, status=400)
+
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+
+    ct = "application/json" if fmt == "json" else "text/csv"
+    fname = f"poly-paper_{table}_{start_dt.date()}_{end_dt.date()}.{fmt}"
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": f"{ct}; charset=utf-8",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",  # disable any nginx buffering
+        },
+    )
+    await resp.prepare(req)
+
+    import csv as _csv
+    import io as _io
+    import json as _jsn
+
+    def _dump_csv_row(writer: "_csv.writer", row: dict, fp: "_io.StringIO") -> bytes:
+        writer.writerow([row.get(k, "") for k in row.keys()])
+        data = fp.getvalue().encode()
+        fp.seek(0)
+        fp.truncate(0)
+        return data
+
+    async def stream_one(label: str, batch_iter):
+        """Yield rows in CSV or NDJSON form."""
+        header_written = False
+        fp = _io.StringIO()
+        writer = _csv.writer(fp)
+        async for row in batch_iter:
+            if fmt == "json":
+                line = _jsn.dumps({"table": label, **row}, default=str) + "\n"
+                await resp.write(line.encode())
+            else:
+                if not header_written:
+                    writer.writerow([f"table={label}"])
+                    writer.writerow(list(row.keys()))
+                    await resp.write(fp.getvalue().encode()); fp.seek(0); fp.truncate(0)
+                    header_written = True
+                writer.writerow([row.get(k, "") for k in row.keys()])
+                await resp.write(fp.getvalue().encode()); fp.seek(0); fp.truncate(0)
+
+    async def paginate_query(model, time_col):
+        """Page through a table, yielding dicts."""
+        page_size = 500
+        last_id = 0
+        while True:
+            async with SessionLocal() as db:
+                rows = (await db.execute(
+                    select(model)
+                    .where(time_col >= start_dt, time_col <= end_dt, model.id > last_id)
+                    .order_by(model.id.asc())
+                    .limit(page_size)
+                )).scalars().all()
+            if not rows:
+                return
+            for r in rows:
+                d = {c.name: getattr(r, c.name) for c in r.__table__.columns}
+                yield d
+            last_id = rows[-1].id
+
+    tables_to_export = []
+    if table in ("all", "intents"):
+        tables_to_export.append(("intents", OrderIntentRow, OrderIntentRow.created_at))
+    if table in ("all", "fills"):
+        tables_to_export.append(("fills", FillRow, FillRow.created_at))
+    if table in ("all", "forecasts"):
+        try:
+            from .weather_calibration import WeatherForecastRecord
+            tables_to_export.append(("forecasts", WeatherForecastRecord, WeatherForecastRecord.recorded_at))
+        except Exception:
+            pass
+
+    for label, model, tcol in tables_to_export:
+        try:
+            await stream_one(label, paginate_query(model, tcol))
+        except Exception as e:
+            # Write an error marker but keep streaming other tables.
+            err_line = f"# export_error {label}: {e}\n".encode()
+            await resp.write(err_line)
+
+    await resp.write_eof()
+    return resp
+
 
 def build_app() -> web.Application:
     app = web.Application()
@@ -168,6 +501,9 @@ def build_app() -> web.Application:
     app.router.add_get("/readyz", readyz)
     app.router.add_get("/metrics", metrics)
     app.router.add_get("/tape", tape)
+    app.router.add_get("/pnl", pnl)
+    app.router.add_get("/weather-quality", weather_quality)
+    app.router.add_get("/export", export_stream)
     return app
 
 

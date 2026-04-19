@@ -51,6 +51,11 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 
 async def init_db() -> None:
     """Create all tables if they don't exist. Idempotent."""
+    # Import all models with table definitions before create_all runs, so
+    # SQLAlchemy's Base.metadata picks them up. Modules are imported for
+    # their side-effect of registering tables with Base.
+    from . import models as _models  # noqa: F401
+    from .. import weather_calibration as _wc  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

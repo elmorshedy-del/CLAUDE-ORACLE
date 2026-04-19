@@ -411,12 +411,15 @@ def evaluate_bucket(
 
     # Taker fee at ask price.
     tfee = float(taker_fee_rate(Decimal(str(ask)), category)) * ask
-    # Maker route: one tick above best bid. Bid may be None (empty side).
+    # Compute a clean maker-post price on the cent grid. Float arithmetic like
+    # (ask - 0.01) produces 0.45999999999999996, which would sit BEHIND top-of-book
+    # and never fill. `maker_post_price` returns a proper Decimal on the 1-cent grid.
+    from ..pricing import maker_post_price, clamp_price
     best_bid = float(book.best_bid) if book.best_bid is not None else 0.0
-    best_ask_side = ask  # already defined
-    tick = 0.01
-    post_price = min(best_bid + tick, best_ask_side - tick)
-    can_post = 0 < post_price < 1
+    best_ask_side = ask
+    post_price_dec = maker_post_price(best_bid, best_ask_side) if best_bid > 0 else None
+    post_price = float(post_price_dec) if post_price_dec is not None else 0.0
+    can_post = post_price > 0
 
     net_edge_taker = p - ask - tfee
     net_edge_taker_bps = int(net_edge_taker * 10000)
@@ -468,18 +471,33 @@ def evaluate_bucket(
             ),
         )
 
-    # Size by sleeve.
-    size_usd = sleeve.max_position_usd
+    # Size by Kelly (fractional, with hard caps from sleeve).
+    from ..kelly import kelly_for_yes_buy
+    used_price = post_price if route == "maker" else ask
+    kelly = kelly_for_yes_buy(
+        probability=p,
+        ask_price=used_price,
+        bankroll_usd=sleeve.bankroll_usd,
+        kelly_fraction=0.25,  # quarter-Kelly: protection against model error
+        max_fraction=float(sleeve.max_position_usd / sleeve.bankroll_usd),
+    )
+    # If Kelly returned 0 stake (edge disappeared at the used price), bail.
+    if kelly.stake_usd == Decimal("0"):
+        return WeatherDecision(
+            intent=None, fair_value=fv, market_ask=ask,
+            gross_edge_bps=gross_bps,
+            net_edge_bps=max(net_edge_maker_bps, net_edge_taker_bps),
+            reason_skipped=f"Kelly zero at {route} price={used_price}: {kelly.rationale}",
+        )
+    size_usd = kelly.stake_usd
     if route == "maker":
         order_type = OrderType.POST_ONLY
-        limit_price = Decimal(str(post_price))
+        limit_price = clamp_price(post_price)
         used_net = net_edge_maker_bps
-        used_price = post_price
     else:
         order_type = OrderType.LIMIT
-        limit_price = Decimal(str(ask))
+        limit_price = clamp_price(ask)
         used_net = net_edge_taker_bps
-        used_price = ask
 
     intent = OrderIntent(
         sleeve_id=sleeve.sleeve_id,
@@ -495,6 +513,8 @@ def evaluate_bucket(
             f"BUY weather bucket via {route}: fv={p:.4f} "
             f"(ensemble {fv.members_in_bucket}/{fv.ensemble_size}), "
             f"ask={ask:.4f}, gross={gross_bps}bps net={used_net}bps. "
+            f"Kelly: f*={kelly.full_kelly:.4f} → stake=${kelly.stake_usd} "
+            f"(quarter-Kelly, frac={kelly.fractional:.4f}). "
             f"Bucket=[{bucket_eval.bucket.lower},{bucket_eval.bucket.upper}) {bucket_eval.bucket.kind}. "
             f"Event: {bucket_eval.event_title[:80]}"
         ),

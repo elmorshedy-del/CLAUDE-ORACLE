@@ -44,6 +44,7 @@ from .exec.models import (
 from .exec.router import execute_order
 from .feeds.open_meteo import CITIES, OpenMeteo, EnsembleSample
 from .strategies.weather import (
+    WeatherFairValue,
     WeatherMarketEval,
     default_weather_sleeves,
     evaluate_bucket,
@@ -232,6 +233,13 @@ async def _evaluate_event(
         return 0
 
     # 3. For each market in the event: parse bucket, fetch book, compute fv, evaluate across sleeves.
+    # 3. Look up NGR fits once per kind (if any).
+    from .ngr_trainer import latest_fit
+    from .ngr import bucket_probability, ensemble_moments
+    from .weather_calibration import record_forecast as _record_forecast
+    temp_fit = await latest_fit(event.city, "temperature_max_day")
+    precip_fit = await latest_fit(event.city, "precipitation_sum_period")
+
     fired = 0
     for m in event.markets:
         bucket = parse_weather_bucket(m.get("question", ""))
@@ -256,11 +264,39 @@ async def _evaluate_event(
         if book is None:
             continue
 
-        # Compute fair value.
+        # Compute RAW fair value (non-parametric ensemble member count).
         if bucket.kind == "temperature_max_day":
             fv = temperature_fair_value(max_temps or [], bucket)
+            members_for_moments = max_temps or []
+            applicable_fit = temp_fit
         else:
             fv = precipitation_fair_value(precip_totals or [], bucket)
+            members_for_moments = precip_totals or []
+            applicable_fit = precip_fit
+
+        # Compute ensemble moments (for NGR AND persistence for future training).
+        ens_mean, ens_var = ensemble_moments(members_for_moments)
+
+        # If a fit is available, override the probability with NGR-calibrated value.
+        # fair_value probability and method tag both updated; other fields (ensemble
+        # counts, bucket info) stay for audit.
+        raw_probability = fv.probability
+        post_method = "raw"
+        if applicable_fit is not None:
+            ngr_p, _ = bucket_probability(
+                members=members_for_moments,
+                lower=bucket.lower, upper=bucket.upper,
+                fit=applicable_fit,
+            )
+            # Replace probability used for trading decision.
+            fv = WeatherFairValue(
+                probability=ngr_p,
+                ensemble_size=fv.ensemble_size,
+                members_in_bucket=fv.members_in_bucket,
+                bucket=bucket,
+                horizon_days=fv.horizon_days,
+            )
+            post_method = "ngr"
 
         eval_ = WeatherMarketEval(
             token_id=yes_token,
@@ -270,6 +306,12 @@ async def _evaluate_event(
             book=book,
             event_title=event.title,
         )
+
+        # Record the forecast for calibration tracking — one record per evaluation,
+        # regardless of whether any sleeve fires.
+        market_bid = float(book.best_bid) if book.best_bid is not None else None
+        market_ask = float(book.best_ask) if book.best_ask is not None else None
+        any_intent_fired = False
 
         # Try each sleeve.
         for sleeve in sleeves:
@@ -336,8 +378,37 @@ async def _evaluate_event(
                 net_bps=decision.net_edge_bps,
             )
             fired += 1
+            any_intent_fired = True
             # One sleeve per bucket — don't stack multiple sleeves on the same position.
             break
+
+        # Record the forecast for calibration tracking — one row per bucket
+        # evaluated per tick, regardless of trade outcome.
+        try:
+            await _record_forecast(
+                event_slug=event.slug,
+                event_title=event.title,
+                market_condition_id=m.get("conditionId", ""),
+                token_id=yes_token,
+                city=event.city,
+                bucket_kind=bucket.kind,
+                bucket_lower=bucket.lower,
+                bucket_upper=bucket.upper,
+                bucket_raw_question=bucket.raw_question,
+                fair_value=fv.probability,
+                raw_fair_value=raw_probability,
+                ensemble_size=fv.ensemble_size,
+                members_in_bucket=fv.members_in_bucket,
+                ensemble_mean_value=ens_mean,
+                ensemble_var_value=ens_var,
+                post_processing=post_method,
+                market_bid=market_bid,
+                market_ask=market_ask,
+                sleeve_id=sleeves[0].sleeve_id if sleeves else None,
+                intent_fired=any_intent_fired,
+            )
+        except Exception as e:
+            log.warning("weather_forecast_record_failed", err=str(e), token=yes_token[:20])
     return fired
 
 
