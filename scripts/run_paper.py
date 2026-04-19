@@ -19,25 +19,17 @@ Env vars:
 from __future__ import annotations
 
 import asyncio
-import os
-
-import structlog
 
 from poly_paper.arb_scanner import run_arb_scanner_forever
 from poly_paper.http_server import serve_forever as serve_http_forever
+from poly_paper.logging_setup import configure_structlog
 from poly_paper.runner import run_forever as run_main_loop_forever
 from poly_paper.selfcorrect import run_selfcorrect_forever
 from poly_paper.weather_runner import run_weather_forever
 
 
 async def main() -> None:
-    structlog.configure(
-        processors=[
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer() if os.environ.get("JSON_LOGS") else structlog.dev.ConsoleRenderer(),
-        ],
-    )
+    configure_structlog()
     # Run all loops concurrently. If any raises, the process exits — Railway
     # will restart it per railway.toml restartPolicy.
     await asyncio.gather(

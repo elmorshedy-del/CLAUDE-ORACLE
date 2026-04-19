@@ -51,6 +51,7 @@ from .exec.models import (
 )
 from .exec.router import execute_order
 from .feeds.btc_spot import BTCSpotFeed
+from .logging_setup import configure_structlog
 from .polymarket.rest import PolymarketRest
 from .strategies.btc_updown import MarketContext, default_btc_up_down_sleeves, evaluate
 from .strategies.bundle_arb import (
@@ -413,13 +414,7 @@ def _side(s):
 # ---------------------------------------------------------------------------
 
 async def run_forever() -> None:
-    structlog.configure(
-        processors=[
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
-        ],
-    )
+    configure_structlog()
     log.info("runner_starting", mode=MODE.value, tick_seconds=TICK_SECONDS, families=ENABLED_FAMILIES)
     await init_db()
     await ensure_sleeves_seeded()

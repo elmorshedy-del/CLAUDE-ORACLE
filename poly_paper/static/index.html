@@ -76,6 +76,20 @@
     color: #7d8590;
   }
   .ctrl input[type="checkbox"] { vertical-align: middle; }
+  .ctrl label.range {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ctrl input[type="date"] {
+    color: #c9d1d9;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+  }
   .ctrl a, .ctrl button {
     color: #58a6ff;
     text-decoration: none;
@@ -117,7 +131,13 @@
   </label>
   <button onclick="refreshAll()">Refresh now</button>
   <a href="/metrics" target="_blank">/metrics</a>
-  <a href="/tape" target="_blank">/tape</a>
+  <button onclick="openTapePreview()">/tape</button>
+  <span class="dim">Export range:</span>
+  <label class="range">from <input type="date" id="export-start"></label>
+  <label class="range">to <input type="date" id="export-end"></label>
+  <button onclick="openExportManifest()">manifest</button>
+  <button onclick="downloadExport()">export zip</button>
+  <button onclick="clearExportRange()">clear</button>
   <a href="/healthz" target="_blank">/healthz</a>
   <span class="dim" id="last-refresh"></span>
 </div>
@@ -211,6 +231,41 @@ async function fetchJson(path) {
   const r = await fetch(path);
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return await r.json();
+}
+
+function exportQuery() {
+  const params = new URLSearchParams();
+  const start = document.getElementById("export-start").value;
+  const end = document.getElementById("export-end").value;
+  if (start) params.set("start", start);
+  if (end) params.set("end", end);
+  return params.toString();
+}
+
+function withExportQuery(path, extras = {}) {
+  const params = new URLSearchParams(exportQuery());
+  for (const [key, value] of Object.entries(extras)) {
+    if (value != null && value !== "") params.set(key, value);
+  }
+  const qs = params.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
+function openTapePreview() {
+  window.open(withExportQuery("/tape", { limit: 200 }), "_blank", "noopener");
+}
+
+function openExportManifest() {
+  window.open(withExportQuery("/export/manifest"), "_blank", "noopener");
+}
+
+function downloadExport() {
+  window.open(withExportQuery("/export/download"), "_blank", "noopener");
+}
+
+function clearExportRange() {
+  document.getElementById("export-start").value = "";
+  document.getElementById("export-end").value = "";
 }
 
 function fmtUSD(n) {

@@ -55,6 +55,11 @@ Railway will expose a public URL. Hit:
 - `https://YOUR-URL/readyz` → `{"status":"ready", ...}` after first tick
 - `https://YOUR-URL/metrics` → per-sleeve stats JSON
 - `https://YOUR-URL/tape` → last 50 trades
+- `https://YOUR-URL/tape?start=2026-04-18&end=2026-04-18&limit=200` → filtered tape slice for one day
+- `https://YOUR-URL/export/manifest` → lightweight inventory of the full export
+- `https://YOUR-URL/export/manifest?start=2026-04-18&end=2026-04-18` → inventory for a filtered one-day export
+- `https://YOUR-URL/export/download` → zipped NDJSON export of all persisted audit tables
+- `https://YOUR-URL/export/download?start=2026-04-18&end=2026-04-18` → lighter one-day zip
 
 ---
 
@@ -112,7 +117,11 @@ python -m scripts.status
 - **Self-correction proposer** — continuous tuning with HARD BOUNDS.
 - **Web dashboard at `/`** — auto-refreshing sleeve health, recent trades,
   system status. No build step.
-- **HTTP endpoints** — `/`, `/healthz`, `/readyz`, `/metrics`, `/tape`.
+- **HTTP endpoints** — `/`, `/healthz`, `/readyz`, `/metrics`, `/tape`,
+  `/export/manifest`, `/export/download`.
+- **Export bundle** — supports optional `start` / `end` filters, includes
+  `derived/full_tape.ndjson` for joined fill+intent history, and exports
+  `tables/weather_forecast_records.ndjson` for weather calibration audits.
 
 ### Empirical findings from real Polymarket data
 **The honest results from live scans:**
@@ -152,6 +161,16 @@ genuine models (weather ensemble, directional theses, LLM judgment).
 | `POLY_ARB_SCAN_SECONDS` | `30` | arb scanner loop interval |
 | `POLY_ARB_MIN_LIQ` | `1000` | min market liquidity for arb scan |
 | `JSON_LOGS` | unset | set to `1` for JSON logs (Railway) |
+| `POLY_EVENT_LOG_PATH` | auto | optional JSONL runtime log path; included in `/export/download` if present |
+
+### Export semantics
+
+- `start` and `end` are optional on `/tape`, `/export/manifest`, and `/export/download`
+- Date-only values like `2026-04-18` are treated as UTC day boundaries
+- `start` is inclusive and `end` is exclusive internally, so `start=2026-04-18&end=2026-04-18` gives one full UTC day
+- Reference tables such as `markets` and `sleeve_configs` stay global for context
+- Heavy time-series tables are filtered by window to keep the zip lighter
+- `summary/recent_tape.json` is a preview slice; `derived/full_tape.ndjson` is the full joined export for the chosen window
 
 ---
 
@@ -179,7 +198,7 @@ poly_paper/
 ├── db/                # async SQLAlchemy (SQLite local, Postgres prod)
 ├── runner.py          # main tick loop
 ├── arb_scanner.py     # continuous arb scanner (separate loop)
-└── http_server.py     # /healthz /readyz /metrics /tape
+└── http_server.py     # /healthz /readyz /metrics /tape /export/*
 
 scripts/
 ├── run_paper.py       # production entry point
