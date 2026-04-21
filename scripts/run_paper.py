@@ -25,6 +25,7 @@ import structlog
 
 from poly_paper.arb_scanner import run_arb_scanner_forever
 from poly_paper.http_server import serve_forever as serve_http_forever
+from poly_paper.market_refresher import run_market_refresher_forever
 from poly_paper.ngr_trainer import run_ngr_trainer_forever
 from poly_paper.runner import run_forever as run_main_loop_forever
 from poly_paper.selfcorrect import run_selfcorrect_forever
@@ -50,6 +51,7 @@ async def main() -> None:
         run_selfcorrect_forever(),
         run_ngr_trainer_forever(),
         run_resolver_forever(),
+        run_market_refresher_forever(),
         return_exceptions=False,
     )
 

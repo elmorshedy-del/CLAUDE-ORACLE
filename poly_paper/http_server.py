@@ -494,6 +494,95 @@ async def export_stream(req: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def risk_snapshot(_req: web.Request) -> web.Response:
+    """Live inventory + net rebate P&L (gross rebates MINUS MTM loss)."""
+    from .risk import compute_net_rebate_pnl, current_inventory
+    report = await compute_net_rebate_pnl()
+    positions = await current_inventory()
+    return web.json_response({
+        "net_rebate": {
+            "gross_rebates_usd": report.gross_rebates_usd,
+            "open_inventory_notional_usd": report.open_inventory_notional_usd,
+            "open_inventory_mtm_pnl_usd": report.open_inventory_mtm_pnl_usd,
+            "net_rebate_pnl_usd": report.net_rebate_pnl_usd,
+            "open_position_count": report.open_position_count,
+        },
+        "positions": [
+            {
+                "market_condition_id": p.market_condition_id,
+                "sleeve_id": p.sleeve_id,
+                "side": p.side,
+                "shares": p.shares,
+                "entry_price": p.entry_price,
+                "cost_usd": p.cost_usd,
+                "last_mid": p.last_mid,
+                "mtm_pnl_usd": p.mtm_pnl_usd,
+            }
+            for p in positions
+        ],
+        "caps": {
+            "max_position_per_market_usd": float(os.environ.get("POLY_MAX_POSITION_PER_MARKET_USD", "50")),
+            "max_sleeve_exposure_fraction": float(os.environ.get("POLY_MAX_SLEEVE_EXPOSURE_FRACTION", "0.10")),
+            "max_global_exposure_fraction": float(os.environ.get("POLY_MAX_GLOBAL_EXPOSURE_FRACTION", "0.50")),
+            "bankroll_usd": float(os.environ.get("POLY_BANKROLL_USD", "1000")),
+        },
+    })
+
+
+async def arb_stats(_req: web.Request) -> web.Response:
+    """Latest arb scan summary + historical arb fills."""
+    from .arb_scanner import get_latest_arb_stats
+    from .db.models import FillRow, OrderIntentRow
+    latest = get_latest_arb_stats()
+
+    async with SessionLocal() as db:
+        rows = (await db.execute(
+            select(FillRow, OrderIntentRow)
+            .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
+            .where(OrderIntentRow.sleeve_id.like("%arb%"))
+            .order_by(FillRow.created_at.desc())
+            .limit(50)
+        )).all()
+    recent = [
+        {
+            "created_at": f.created_at.isoformat(),
+            "sleeve_id": i.sleeve_id,
+            "market_condition_id": i.market_condition_id,
+            "rejected": f.rejected,
+            "price": f.avg_price,
+            "shares": f.filled_size_shares,
+            "fees": f.fees_usd,
+            "reasoning": (i.reasoning or "")[:180],
+        }
+        for f, i in rows
+    ]
+
+    # Simple aggregates over arb fills: total notional, avg gap, fire rate.
+    from sqlalchemy import func as _f
+    async with SessionLocal() as db:
+        fire_count = (await db.execute(
+            select(_f.count()).select_from(FillRow)
+            .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
+            .where(OrderIntentRow.sleeve_id.like("%arb%"))
+        )).scalar() or 0
+        reject_count = (await db.execute(
+            select(_f.count()).select_from(FillRow)
+            .join(OrderIntentRow, FillRow.client_order_id == OrderIntentRow.client_order_id)
+            .where(OrderIntentRow.sleeve_id.like("%arb%"))
+            .where(FillRow.rejected == True)  # noqa: E712
+        )).scalar() or 0
+
+    return web.json_response({
+        "latest_scan": latest,
+        "lifetime": {
+            "arb_fills_total": fire_count,
+            "arb_fills_rejected": reject_count,
+            "arb_fills_filled": fire_count - reject_count,
+        },
+        "recent": recent,
+    })
+
+
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", index)
@@ -504,6 +593,8 @@ def build_app() -> web.Application:
     app.router.add_get("/pnl", pnl)
     app.router.add_get("/weather-quality", weather_quality)
     app.router.add_get("/export", export_stream)
+    app.router.add_get("/risk", risk_snapshot)
+    app.router.add_get("/arb-stats", arb_stats)
     return app
 
 

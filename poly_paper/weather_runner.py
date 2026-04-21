@@ -327,7 +327,51 @@ async def _evaluate_event(
                 )
                 continue
 
+            # Pre-trade risk check — never let inventory stack past hard caps.
+            from .risk import check_pre_trade
+            proposed_notional = decision.intent.size_usd or Decimal("0")
+            risk = await check_pre_trade(
+                market_condition_id=decision.intent.market_condition_id,
+                sleeve_id=sleeve.sleeve_id,
+                proposed_notional_usd=proposed_notional,
+            )
+            if not risk.allow:
+                log.info(
+                    "weather_risk_blocked",
+                    sleeve=sleeve.sleeve_id,
+                    reason=risk.reason,
+                    mkt_exp=float(risk.current_market_exposure_usd),
+                    sleeve_exp=float(risk.current_sleeve_exposure_usd),
+                    global_exp=float(risk.current_global_exposure_usd),
+                )
+                continue
+
             async with SessionLocal() as db:
+                # Upsert a Market row so the resolver / PnL layer knows this market exists.
+                from .db.models import Market
+                from sqlalchemy import select as _select
+                cond_id = decision.intent.market_condition_id
+                if cond_id:
+                    existing_mkt = (await db.execute(
+                        _select(Market).where(Market.condition_id == cond_id)
+                    )).scalar_one_or_none()
+                    if existing_mkt is None:
+                        db.add(Market(
+                            condition_id=cond_id,
+                            question=m.get("question", "")[:255],
+                            slug=(event.slug or m.get("slug", ""))[:255],
+                            category="weather",
+                            strategy_family="weather",
+                            end_date_iso=m.get("endDate", "")[:32],
+                            tokens_json=[
+                                {"outcome": "Yes", "token_id": yes_token},
+                                {"outcome": "No",  "token_id": clob[1] if len(clob) > 1 else ""},
+                            ],
+                            params_json={"kind": bucket.kind, "city": event.city},
+                            in_universe=True,
+                            last_volume_24h_usd=float(m.get("volume24hr") or 0),
+                            last_liquidity_usd=float(m.get("liquidity") or 0),
+                        ))
                 db.add(OrderIntentRow(
                     client_order_id=decision.intent.client_order_id,
                     sleeve_id=decision.intent.sleeve_id,

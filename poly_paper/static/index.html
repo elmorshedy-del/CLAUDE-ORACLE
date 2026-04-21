@@ -145,9 +145,9 @@
     <div class="sub" id="stat-fills-sub"></div>
   </div>
   <div class="stat">
-    <div class="lbl">Rebate income</div>
-    <div class="val" id="stat-rebate">…</div>
-    <div class="sub" id="stat-rebate-sub">maker fees earned</div>
+    <div class="lbl">Net rebate P&amp;L</div>
+    <div class="val" id="stat-netreb">…</div>
+    <div class="sub" id="stat-netreb-sub">rebates minus MTM loss</div>
   </div>
 </div>
 
@@ -155,6 +155,8 @@
   <button class="tab active" data-tab="sleeves">Sleeves</button>
   <button class="tab" data-tab="pnl">P&amp;L per trade</button>
   <button class="tab" data-tab="tape">Tape</button>
+  <button class="tab" data-tab="arb">Arbitrage</button>
+  <button class="tab" data-tab="risk">Inventory / Risk</button>
   <button class="tab" data-tab="weather">Weather quality</button>
   <button class="tab" data-tab="export">Export</button>
 </div>
@@ -219,6 +221,86 @@
           <th>Reasoning</th>
         </tr></thead>
         <tbody id="tape-body"><tr><td colspan="9" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-arb">
+  <div class="row">
+    <div class="stat">
+      <div class="lbl">Latest scan · events</div>
+      <div class="val" id="arb-events">…</div>
+      <div class="sub" id="arb-events-sub">from Polymarket Gamma</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Candidates evaluated</div>
+      <div class="val" id="arb-cands">…</div>
+      <div class="sub" id="arb-cands-sub">mutually exclusive buckets</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Arbs fired · latest scan</div>
+      <div class="val" id="arb-fired">…</div>
+      <div class="sub" id="arb-fired-sub">last pass</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Arb fills · lifetime</div>
+      <div class="val" id="arb-lifetime">…</div>
+      <div class="sub" id="arb-lifetime-sub">filled vs rejected</div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr"><h2>Recent arb activity</h2><span class="hint">last 50 arb-sleeve fills/rejects with reasoning</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>When</th><th>Sleeve</th><th>Status</th>
+          <th class="num">Price</th><th class="num">Shares</th><th class="num">Fees</th>
+          <th>Reasoning</th>
+        </tr></thead>
+        <tbody id="arb-body"><tr><td colspan="7" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-risk">
+  <div class="row">
+    <div class="stat">
+      <div class="lbl">Gross rebates earned</div>
+      <div class="val" id="risk-gross">…</div>
+      <div class="sub">maker fees back (positive = earned)</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Open inventory MTM</div>
+      <div class="val" id="risk-mtm">…</div>
+      <div class="sub">mark-to-market P&amp;L on holdings</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">NET rebate P&amp;L</div>
+      <div class="val" id="risk-net">…</div>
+      <div class="sub">rebates + MTM · the real economics</div>
+    </div>
+    <div class="stat">
+      <div class="lbl">Open inventory</div>
+      <div class="val" id="risk-inv">…</div>
+      <div class="sub" id="risk-inv-sub">across positions</div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr"><h2>Risk caps</h2><span class="hint">hard limits · trades violating these are blocked pre-fill</span></div>
+    <div id="risk-caps" style="padding:14px 18px;color:var(--text-dim);font-size:12px"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-hdr"><h2>Open positions</h2><span class="hint">per (market, sleeve, side) · largest MTM first</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>Market</th><th>Sleeve</th><th>Side</th>
+          <th class="num">Shares</th><th class="num">Entry</th><th class="num">Cost</th>
+          <th class="num">Last mid</th><th class="num">MTM P&amp;L</th>
+        </tr></thead>
+        <tbody id="risk-positions"><tr><td colspan="8" class="dim" style="padding:20px;text-align:center">loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -308,9 +390,10 @@ async function refreshMetrics(){
     document.getElementById('stat-fills').textContent=fmtN(fills);
     document.getElementById('stat-fills-sub').innerHTML='<span class="dim">'+fmtN(intents)+' intents · '+fmtN(rej)+' rejected</span>';
     const rebate=-fees;
-    const rebEl=document.getElementById('stat-rebate');
+    const rebEl=document.getElementById('stat-netreb');
+    // /metrics shows gross rebates only; we'll overwrite via refreshRisk() with the true net figure.
     rebEl.innerHTML='<span class="'+(rebate>0?'up':'down')+'-color">'+fmtUSD(rebate)+'</span>';
-    document.getElementById('stat-rebate-sub').textContent=rebate>0?'positive — we post-only':'net taker fees';
+    document.getElementById('stat-netreb-sub').textContent='gross only · fetching net…';
 
     const body=sl.map(s=>{
       const hq=s.fills_24h>0?s.high_conf_fill_pct:null;
@@ -410,6 +493,83 @@ async function refreshTape(){
   }catch(e){console.warn('tape failed',e)}
 }
 
+async function refreshArb(){
+  try{
+    const d=await jget('/arb-stats');
+    const l=d.latest_scan||{};
+    const lt=d.lifetime||{};
+    document.getElementById('arb-events').textContent=fmtN(l.n_events||0);
+    document.getElementById('arb-events-sub').textContent=l.timestamp?'scanned '+ageStr(new Date(l.timestamp*1000).toISOString()):'pending';
+    document.getElementById('arb-cands').textContent=fmtN(l.candidates_scanned||0);
+    document.getElementById('arb-cands-sub').textContent=(l.n_markets||0)+' binary markets';
+    document.getElementById('arb-fired').textContent=fmtN(l.arbs_fired||0);
+    document.getElementById('arb-fired-sub').textContent=l.elapsed_sec?l.elapsed_sec+'s scan':'—';
+    document.getElementById('arb-lifetime').textContent=fmtN(lt.arb_fills_total||0);
+    document.getElementById('arb-lifetime-sub').textContent=(lt.arb_fills_filled||0)+' filled · '+(lt.arb_fills_rejected||0)+' rejected';
+    const rows=(d.recent||[]).map(r=>{
+      const price=r.rejected?'—':(r.price?Number(r.price).toFixed(4):'—');
+      const shares=r.rejected?'—':(r.shares?Number(r.shares).toFixed(0):'—');
+      const status=r.rejected?'<span class="pill off">REJ</span>':'<span class="pill high">filled</span>';
+      return '<tr>'+
+        '<td class="dim">'+timeShort(r.created_at)+'</td>'+
+        '<td class="mono">'+shortId(r.sleeve_id)+'</td>'+
+        '<td>'+status+'</td>'+
+        '<td class="num">'+price+'</td>'+
+        '<td class="num">'+shares+'</td>'+
+        '<td class="num '+(r.fees&&Number(r.fees)<0?'up-color':'')+'">'+fmtUSD(r.fees)+'</td>'+
+        '<td><span class="reason" title="'+(r.reasoning||'').replace(/"/g,'&quot;')+'">'+(r.reasoning||'')+'</span></td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('arb-body').innerHTML=rows||'<tr><td colspan="7" class="dim" style="padding:20px;text-align:center">no arb activity yet</td></tr>';
+  }catch(e){console.warn('arb-stats failed',e)}
+}
+
+async function refreshRisk(){
+  try{
+    const d=await jget('/risk');
+    const n=d.net_rebate||{};
+    // Top card — net rebate P&L.
+    const netEl=document.getElementById('stat-netreb');
+    netEl.textContent=fmtUSD(n.net_rebate_pnl_usd);
+    netEl.className='val '+(n.net_rebate_pnl_usd>0?'up':(n.net_rebate_pnl_usd<0?'down':''));
+    document.getElementById('stat-netreb-sub').textContent='gross '+fmtUSD(n.gross_rebates_usd)+' + MTM '+fmtUSD(n.open_inventory_mtm_pnl_usd);
+
+    // Risk tab cards
+    const gEl=document.getElementById('risk-gross');gEl.textContent=fmtUSD(n.gross_rebates_usd);gEl.className='val '+(n.gross_rebates_usd>0?'up':'');
+    const mEl=document.getElementById('risk-mtm');mEl.textContent=fmtUSD(n.open_inventory_mtm_pnl_usd);mEl.className='val '+pnlClass(n.open_inventory_mtm_pnl_usd);
+    const netEl2=document.getElementById('risk-net');netEl2.textContent=fmtUSD(n.net_rebate_pnl_usd);netEl2.className='val '+pnlClass(n.net_rebate_pnl_usd);
+    document.getElementById('risk-inv').textContent=fmtN(n.open_position_count||0);
+    document.getElementById('risk-inv-sub').textContent=fmtUSD(n.open_inventory_notional_usd)+' notional';
+
+    // Caps panel
+    const c=d.caps||{};
+    document.getElementById('risk-caps').innerHTML=
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">'+
+      '<div><div class="q-sm">Per market</div><div class="q-val">'+fmtUSD(c.max_position_per_market_usd)+'</div></div>'+
+      '<div><div class="q-sm">Per sleeve</div><div class="q-val">'+((c.max_sleeve_exposure_fraction||0)*100).toFixed(0)+'% of bankroll = '+fmtUSD((c.max_sleeve_exposure_fraction||0)*(c.bankroll_usd||0))+'</div></div>'+
+      '<div><div class="q-sm">Global cap</div><div class="q-val">'+((c.max_global_exposure_fraction||0)*100).toFixed(0)+'% = '+fmtUSD((c.max_global_exposure_fraction||0)*(c.bankroll_usd||0))+'</div></div>'+
+      '<div><div class="q-sm">Bankroll</div><div class="q-val">'+fmtUSD(c.bankroll_usd)+'</div></div>'+
+      '</div>';
+
+    // Positions
+    const pRows=(d.positions||[]).map(p=>{
+      const cid=p.market_condition_id||'';
+      const short=cid.length>14?cid.slice(0,6)+'…'+cid.slice(-6):cid;
+      return '<tr>'+
+        '<td class="mono" title="'+cid+'">'+short+'</td>'+
+        '<td class="mono">'+shortId(p.sleeve_id)+'</td>'+
+        '<td>'+p.side+'</td>'+
+        '<td class="num">'+fmtN(p.shares)+'</td>'+
+        '<td class="num">'+(p.entry_price==null?'—':p.entry_price.toFixed(4))+'</td>'+
+        '<td class="num">'+fmtUSD(p.cost_usd)+'</td>'+
+        '<td class="num">'+(p.last_mid==null?'—':p.last_mid.toFixed(4))+'</td>'+
+        '<td class="num '+pnlClass(p.mtm_pnl_usd)+'">'+(p.mtm_pnl_usd==null?'—':fmtUSD(p.mtm_pnl_usd))+'</td>'+
+      '</tr>';
+    }).join('');
+    document.getElementById('risk-positions').innerHTML=pRows||'<tr><td colspan="8" class="dim" style="padding:20px;text-align:center">no open positions</td></tr>';
+  }catch(e){console.warn('risk failed',e)}
+}
+
 async function refreshWeather(){
   try{
     const d=await jget('/weather-quality');
@@ -483,7 +643,7 @@ document.querySelectorAll('.tab').forEach(t=>{
 
 async function refreshAll(){
   document.getElementById('last-upd').innerHTML='<span class="spinner"></span>refreshing';
-  await Promise.all([refreshStatus(),refreshMetrics(),refreshPnl(),refreshTape(),refreshWeather()]);
+  await Promise.all([refreshStatus(),refreshMetrics(),refreshPnl(),refreshTape(),refreshWeather(),refreshArb(),refreshRisk()]);
   document.getElementById('last-upd').textContent='updated '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 

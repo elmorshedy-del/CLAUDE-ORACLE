@@ -190,6 +190,40 @@ async def discover_and_upsert(
             existing.last_volume_24h_usd = vol
             existing.last_liquidity_usd = liq
             existing.last_seen_at = datetime.now(timezone.utc)
+            # Update resolution / MTM params from Gamma payload so /pnl has fresh data.
+            # Gamma returns outcomePrices (closed markets) and lastTradePrice / bestBid /
+            # bestAsk for open markets. We persist:
+            #   closed:           bool
+            #   closed_yes_price: float 0-1 (resolution price for YES token)
+            #   last_mid:         float — current mid for mark-to-market
+            params_updates: dict = dict(existing.params_json or {})
+            mkt_inner = (market_or_event_dict.get("markets") or [market_or_event_dict])[0]
+            is_closed = bool(mkt_inner.get("closed"))
+            params_updates["closed"] = is_closed
+            if is_closed:
+                op = mkt_inner.get("outcomePrices")
+                if isinstance(op, str):
+                    try:
+                        op = _json.loads(op)
+                    except Exception:
+                        op = None
+                if op and len(op) >= 1:
+                    try:
+                        params_updates["closed_yes_price"] = float(op[0])
+                    except (TypeError, ValueError):
+                        pass
+            # Mark-to-market: prefer lastTradePrice, fall back to (bid+ask)/2.
+            ltp = mkt_inner.get("lastTradePrice")
+            bid = mkt_inner.get("bestBid")
+            ask = mkt_inner.get("bestAsk")
+            try:
+                if ltp is not None:
+                    params_updates["last_mid"] = float(ltp)
+                elif bid is not None and ask is not None:
+                    params_updates["last_mid"] = (float(bid) + float(ask)) / 2.0
+            except (TypeError, ValueError):
+                pass
+            existing.params_json = params_updates
             counters["updated"] += 1
 
     await db.commit()

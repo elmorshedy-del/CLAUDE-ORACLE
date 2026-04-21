@@ -328,10 +328,62 @@ async def _scan_candidate(
         decision = evaluate_bundle(sleeve, ctx)
         if not decision.intents:
             continue
+
+        # Pre-trade risk: sum notional across all legs, check against caps once.
+        from .risk import check_pre_trade
+        total_bundle_notional = sum(
+            (intent.size_usd or Decimal("0")) for intent in decision.intents
+        )
+        # For a bundle, we check global + sleeve caps but allow per-market since
+        # bundle arb is by definition ONE trade per market (one leg per outcome).
+        first_cid = decision.intents[0].market_condition_id if decision.intents else ""
+        risk = await check_pre_trade(
+            market_condition_id=first_cid,
+            sleeve_id=sleeve.sleeve_id,
+            proposed_notional_usd=total_bundle_notional,
+        )
+        if not risk.allow:
+            log.info(
+                "arb_risk_blocked",
+                sleeve=sleeve.sleeve_id, reason=risk.reason,
+                total_notional=float(total_bundle_notional),
+            )
+            continue
         # For each leg of the bundle, we need the corresponding book to execute against.
         book_by_token = {q.token_id: q.book for q in quotes}
 
         async with SessionLocal() as db:
+            # Upsert Market rows for every outcome's condition_id so the resolver
+            # can track closed_yes_price / last_mid for arb trades.
+            from .db.models import Market
+            from sqlalchemy import select as _select
+            seen_cids: set[str] = set()
+            for o in candidate.outcomes:
+                cid = o.get("market_condition_id") or ""
+                if not cid or cid in seen_cids:
+                    continue
+                seen_cids.add(cid)
+                ex = (await db.execute(
+                    _select(Market).where(Market.condition_id == cid)
+                )).scalar_one_or_none()
+                if ex is None:
+                    db.add(Market(
+                        condition_id=cid,
+                        question=(candidate.label or "")[:255],
+                        slug=(candidate.label or "")[:255],
+                        category=candidate.category.value,
+                        strategy_family="global_arb",
+                        end_date_iso="",
+                        tokens_json=[
+                            {"outcome": oo["outcome"], "token_id": oo["token_id"]}
+                            for oo in candidate.outcomes
+                            if oo.get("market_condition_id") == cid
+                        ],
+                        params_json={"arb_label": candidate.label},
+                        in_universe=True,
+                        last_volume_24h_usd=0.0,
+                        last_liquidity_usd=0.0,
+                    ))
             for intent in decision.intents:
                 # Persist intent row.
                 db.add(OrderIntentRow(
@@ -426,11 +478,29 @@ async def scan_once(sleeves: list[ExecSleeveConfig]) -> dict:
                     return 0
         results = await asyncio.gather(*[_one(c) for c in candidates])
         fired_total = sum(results)
-        return {
+        stats = {
             "elapsed_sec": round(time.time() - t0, 2),
             "candidates_scanned": len(candidates),
             "arbs_fired": fired_total,
+            "n_events": len(events),
+            "n_markets": len(markets),
+            "timestamp": time.time(),
         }
+        # Stash latest scan summary for dashboard.
+        global _LATEST_ARB_STATS
+        _LATEST_ARB_STATS = stats
+        return stats
+
+
+# Module-level arb stats snapshot (latest scan) for dashboard.
+_LATEST_ARB_STATS: dict = {
+    "elapsed_sec": None, "candidates_scanned": 0, "arbs_fired": 0,
+    "n_events": 0, "n_markets": 0, "timestamp": None,
+}
+
+
+def get_latest_arb_stats() -> dict:
+    return dict(_LATEST_ARB_STATS)
 
 
 async def run_arb_scanner_forever() -> None:
